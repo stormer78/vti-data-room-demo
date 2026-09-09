@@ -48,6 +48,7 @@
 mod admission;
 mod mediator;
 mod owner;
+mod rooms;
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -80,7 +81,7 @@ pub(crate) struct Room {
     /// screen: the same button is offered in both rooms and only works in one, because only
     /// one room's owner conferred the action. A demo where every member could do everything
     /// would be demonstrating storage.
-    pub(crate) member_actions: &'static [&'static str],
+    pub(crate) member_actions: Vec<String>,
     /// The owner's own credentials for this room, so it can act as a member with `admin`.
     ///
     /// Minting an epoch at the host is a room operation like any other: it takes a
@@ -195,7 +196,7 @@ async fn catalogue(State(demo): State<Rooms>) -> Json<Vec<CatalogueEntry>> {
             .map(|r| CatalogueEntry {
                 room_id: r.id.clone(),
                 host: host.clone(),
-                grants: r.member_actions.iter().map(|a| (*a).to_string()).collect(),
+                grants: r.member_actions.clone(),
                 room_did: r.identity.did.clone(),
                 label: r.label.clone(),
                 epoch: r.room.room_epoch(),
@@ -301,6 +302,17 @@ async fn register_with_host(
 
 #[tokio::main]
 async fn main() {
+    // First, before anything is minted or connected. A bad rooms file is a startup failure,
+    // and it should read like one — not arrive after a page of output describing work that
+    // is about to be thrown away.
+    let specs = match rooms::load(std::env::var("ROOMS_FILE").ok().as_deref()) {
+        Ok(specs) => specs,
+        Err(e) => {
+            eprintln!("{e}");
+            std::process::exit(1);
+        }
+    };
+
     let host_url =
         std::env::var("ROOM_HOST_URL").unwrap_or_else(|_| "http://127.0.0.1:8300".into());
     // What members are told. The host's DID when there is one — `room-host --mediator-did`
@@ -332,18 +344,8 @@ async fn main() {
     println!("owner: {}", owner.did);
 
     let mut rooms = BTreeMap::new();
-    for (id, label, member_actions) in [
-        (
-            "demo-library",
-            "The Library — a shared reading room",
-            &["read", "write"][..],
-        ),
-        (
-            "demo-workshop",
-            "The Workshop — notes an agent can recall",
-            &["read", "write", "curate"][..],
-        ),
-    ] {
+    for spec in specs {
+        let (id, label, member_actions) = (spec.id, spec.label, spec.grants);
         // Identity first, then the group. A room is a DTG node before it is a set of keys,
         // and the order is forced: a host told about a room it named could never let it
         // leave.

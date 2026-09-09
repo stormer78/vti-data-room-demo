@@ -131,6 +131,9 @@ and bound to the connection that carried it.
 
 ## Running it
 
+**[GUIDE.md](GUIDE.md) is the walkthrough** — what to type, what to click, how to set up your
+own room, and what to look at while you do. This section is the short form.
+
 Two modes. The first is the smaller thing to stand up; the second is the one the design is
 about.
 
@@ -149,8 +152,9 @@ cd sample-room && DEMO_WEB_DIR=../web cargo run
 # → http://127.0.0.1:8787
 ```
 
-Rooms are `did:key` here, so they advertise nothing and can only be joined through this
-sample's own catalogue. That is honest rather than broken: a room pointing at somewhere
+The rooms the sample offers are named by `ROOMS_FILE`, or a built-in pair when it is unset —
+see [GUIDE.md §3](GUIDE.md#3-set-up-your-own-room). Rooms are `did:key` in this mode, so they
+advertise nothing and can only be joined through this sample's own catalogue. That is honest rather than broken: a room pointing at somewhere
 nobody listens fails at the join, while a room pointing nowhere says so before you try.
 
 ### Over a mediator, with no browser-reachable URL anywhere

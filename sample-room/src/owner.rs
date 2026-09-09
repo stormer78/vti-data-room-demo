@@ -497,7 +497,7 @@ mod tests {
                 label: "R".into(),
                 room: vti_rooms::sealed::SealedRoom::new(room_did.clone(), group),
                 identity,
-                member_actions: &["read"],
+                member_actions: vec!["read".into()],
                 owner_membership: String::new(),
                 owner_authority: String::new(),
                 members: vec!["did:key:zMember".into()],

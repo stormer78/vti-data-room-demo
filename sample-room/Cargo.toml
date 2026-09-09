@@ -64,5 +64,8 @@ getrandom = "0.4"
 chrono = "0.4"
 
 [dev-dependencies]
+# The rooms-file tests write one and read it back, so they exercise the parse rather than a
+# string this test module made up.
+tempfile = "3"
 # The admission checks are async — they verify a proof — so the tests need a runtime.
 tokio = { version = "1", features = ["rt", "macros"] }

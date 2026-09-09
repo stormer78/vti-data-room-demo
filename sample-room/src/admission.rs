@@ -335,7 +335,14 @@ pub async fn admit(demo: &Demo, req: &AdmissionRequest) -> Result<Admitted, Refu
         .map_err(Refusal::internal)?;
     let authority = room
         .identity
-        .issue_authority(&req.member_did, room.member_actions)
+        .issue_authority(
+            &req.member_did,
+            &room
+                .member_actions
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+        )
         .await
         .map_err(Refusal::internal)?;
 
