@@ -92,6 +92,10 @@
       invitation adding a member, and yours stop your own key holder being filled with a
       room you never agreed to join.</p>
     <ul id="steps" class="steps"></ul>
+    <p class="sub" style="margin:.75rem 0 0">This room's address:
+      <code id="room-link" class="mono"></code> — a room is addressed, never configured, so
+      that link works in any browser holding keys for it, against a host this site has never
+      seen.</p>
     <div class="epochs">
       <div id="epoch">–<span>your epoch</span></div>
       <div id="earliest">–<span>earliest readable</span></div>
@@ -181,7 +185,6 @@ const S = {
 let identity = null;               // the wasm-held signing identity
 let me = null;                     // { did } — the public half, for display
 let member = null;                 // a live RoomMember
-let currentRoom = null;
 let currentRoomDid = null;
 
 // Several identities in one browser, because a room with one member demonstrates
@@ -195,7 +198,7 @@ function load() {
   const saved = S.get(key("identity"));
   identity = saved ? Identity.restore(saved) : null;
   me = identity ? { did: identity.did } : null;
-  member = null; currentRoom = null; currentRoomDid = null;
+  member = null; currentRoomDid = null;
 }
 load();
 
@@ -230,6 +233,37 @@ function renderIdentity() {
   $("rooms-panel").classList.remove("hide");
 }
 
+/// Open a room named in the URL rather than listed by the sample.
+///
+/// Works when this browser already holds keys for it — which is the case that matters,
+/// because it is the one that proves the site is a client rather than a front end for the
+/// room shipped beside it. Everything the room panel does from here is host-only: list,
+/// get, put, curate, and the epoch chain.
+///
+/// What it cannot do is get you *in*. Admission needs the room's owner, and reaching an
+/// owner you were not handed means resolving the room's DID to a mediator and speaking
+/// DIDComm — which a `did:key` room cannot advertise. Said plainly rather than offered and
+/// then failing.
+async function openAddressedRoom() {
+  const addressed = roomFromUrl();
+  if (!addressed || !me) return false;
+
+  const held = S.get(key("room:" + addressed.roomDid));
+  if (!held) {
+    log(`this browser holds no keys for ${addressed.roomDid} — you would need an `
+      + `invitation from its owner, and reaching an owner this site was not told about `
+      + `needs the room to advertise a mediator, which a did:key room cannot`);
+    return false;
+  }
+  // The host from the link wins: a room may move, and the address you were given is more
+  // current than the one you stored when you joined.
+  if (addressed.host && addressed.host !== held.host) {
+    S.set(key("room:" + addressed.roomDid), { ...held, host: addressed.host });
+  }
+  await openRoom(addressed.roomDid);
+  return true;
+}
+
 // ── rooms ──────────────────────────────────────────────────────────────────
 //
 // A room has two names here and they are not interchangeable. Its **DID** is its
@@ -244,7 +278,7 @@ async function loadRooms() {
   const rooms = await (await fetch("/api/rooms")).json();
   $("rooms").innerHTML = "";
   for (const r of rooms) {
-    const held = S.get(key("room:" + r.roomId));
+    const held = S.get(key("room:" + r.roomDid));
     const el = document.createElement("div");
     el.className = "card";
     el.innerHTML = `<strong>${r.label}</strong>
@@ -254,7 +288,7 @@ async function loadRooms() {
     const b = document.createElement("button");
     b.className = held ? "ghost" : "";
     b.textContent = held ? "Open" : "Ask to join";
-    b.onclick = () => held ? openRoom(r.roomId) : join(r.roomId, r.roomDid);
+    b.onclick = () => held ? openRoom(r.roomDid) : join(r.roomId, r.roomDid);
     el.append(b);
     $("rooms").append(el);
   }
@@ -308,10 +342,12 @@ async function join(roomId, roomDid) {
   mine.push("welcome accepted in this tab — the group key never left the owner unsealed");
   mine.push("invitation spent — it will not work a second time");
 
-  currentRoom = roomId;
   currentRoomDid = roomDid;
-  S.set(key("room:" + roomId), {
-    snapshot: member.snapshot(), roomDid,
+  // Keyed by the room's DID, because that is the room's identifier. `slug` rides along
+  // only because this sample's OWNER routes on it — the host never sees it, and a room
+  // addressed by URL has none, which is why every use of it below is conditional.
+  S.set(key("room:" + roomDid), {
+    snapshot: member.snapshot(), roomDid, host: SAMPLE_HOST, slug: roomId,
     membership: out.membership, authority: out.authority,
   });
 
@@ -320,8 +356,8 @@ async function join(roomId, roomDid) {
   const rungs = await fetchChain().catch(() => 0);
   if (rungs) {
     mine.push(`epoch key chain fetched — ${rungs} rung(s), so the room's history opens`);
-    S.set(key("room:" + roomId), {
-      ...S.get(key("room:" + roomId)), snapshot: member.snapshot(),
+    S.set(key("room:" + roomDid), {
+      ...S.get(key("room:" + roomDid)), snapshot: member.snapshot(),
     });
   }
 
@@ -335,18 +371,17 @@ async function join(roomId, roomDid) {
   log("");
 }
 
-async function openRoom(roomId) {
-  const held = S.get(key("room:" + roomId));
+async function openRoom(roomDid) {
+  const held = S.get(key("room:" + roomDid));
   member = RoomMember.restore(held.snapshot);
-  currentRoom = roomId;
-  currentRoomDid = held.roomDid;
+  currentRoomDid = roomDid;
 
-  const applied = await catchUp(roomId, held);
+  const applied = await catchUp(held);
   // Rungs minted while this member was away arrive the same way the commits did.
   const rungs = await fetchChain().catch(() => 0);
   if (applied || rungs) {
-    S.set(key("room:" + roomId), {
-      ...S.get(key("room:" + roomId)), snapshot: member.snapshot(),
+    S.set(key("room:" + roomDid), {
+      ...S.get(key("room:" + roomDid)), snapshot: member.snapshot(),
     });
   }
   $("steps").innerHTML = "<li>restored from this browser — no key left it</li>"
@@ -392,9 +427,16 @@ async function fetchChain() {
 ///
 /// A pull, because a tab has no inbox. In the real design the commit is pushed to a
 /// member's agent over DIDComm; the same inversion the invitation forced applies here.
-async function catchUp(roomId, held) {
+async function catchUp(held) {
+  // Commits come from the room's OWNER, not its host — a host stores ciphertext and has no
+  // opinion about the group. This sample's owner routes on a slug; a room addressed by URL
+  // has none, so catching up is simply unavailable and the member will find newer records
+  // refusing to open. That is the gap, stated rather than papered over: reaching an owner
+  // needs the room to advertise a mediator.
+  if (!held.slug) return 0;
+
   const missed = await (await fetch(
-    `/api/rooms/${roomId}/commits?since=${member.epoch}`)).json();
+    `/api/rooms/${held.slug}/commits?since=${member.epoch}`)).json();
   if (!missed.length) return 0;
 
   for (const c of missed) {
@@ -402,11 +444,15 @@ async function catchUp(roomId, held) {
     // meaningful against the epoch immediately before it.
     member.applyCommit(b64u.dec(c.commit));
   }
-  S.set(key("room:" + roomId), { ...held, snapshot: member.snapshot() });
+  S.set(key("room:" + held.roomDid), { ...held, snapshot: member.snapshot() });
   return missed.length;
 }
 
 function showEpochs() {
+  const held = S.get(key("room:" + currentRoomDid)) ?? {};
+  $("room-link").textContent =
+    `${location.origin}/#/room/${encodeURIComponent(currentRoomDid)}`
+    + `?at=${encodeURIComponent(held.host ?? SAMPLE_HOST)}`;
   $("epoch").firstChild.textContent = member.epoch;
   $("earliest").firstChild.textContent = member.earliestReadableEpoch();
 }
@@ -424,13 +470,32 @@ function showEpochs() {
 //
 // Both are produced in wasm, by the key this page never sees.
 
-/// The host this demo's rooms are on. In a real deployment it comes from the room's
-/// address, not from a constant — the site works against a host it has never seen.
-const HOST = localStorage.getItem("dr:host") ?? "http://127.0.0.1:8300";
+/// Where the sample room's host is. A *default*, not a constant: a room carries its own
+/// host, and this is only what the catalogue's rooms happen to use.
+const SAMPLE_HOST = "http://127.0.0.1:8300";
+
+/// A room is addressed, never configured.
+///
+/// `#/room/<roomDid>?at=<host url>` — paste one of those and this site works against a room
+/// it has never seen, on a host it does not know, provided you hold credentials for it.
+/// That is the whole of "one site, any number of rooms", and it is why nothing below reads
+/// a room out of a constant.
+///
+/// The **records** half genuinely works this way, because a host needs nothing but the
+/// request: a signed document and a chain the room issued. **Admission** does not, and
+/// cannot yet — it needs the room's owner, who is reachable over DIDComm at the mediator
+/// the room advertises, and a `did:key` room advertises nothing. Named here rather than
+/// hidden, because the difference is the honest boundary of what this demonstrates.
+function roomFromUrl() {
+  const m = location.hash.match(/^#\/room\/([^?]+)(?:\?(.*))?$/);
+  if (!m) return null;
+  const params = new URLSearchParams(m[2] ?? "");
+  return { roomDid: decodeURIComponent(m[1]), host: params.get("at") ?? SAMPLE_HOST };
+}
 
 /// Send one Trust Task to the host, signed, carrying a presentation for `action`.
 async function hostTask(type, action, payload) {
-  const held = S.get(key("room:" + currentRoom));
+  const held = S.get(key("room:" + currentRoomDid));
 
   // Minting the presentation can fail, and when it does the request is never made.
   // `attenuate` refuses to widen, so asking for an action the room did not grant fails
@@ -458,7 +523,7 @@ async function hostTask(type, action, payload) {
     payload: { roomId: currentRoomDid, presentation, ...payload },
   };
 
-  const res = await fetch(`${HOST}/trust-tasks`, {
+  const res = await fetch(`${held.host ?? SAMPLE_HOST}/trust-tasks`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: identity.signDocument(JSON.stringify(document)),
@@ -625,4 +690,9 @@ $("write").onclick = write;
 
 renderIdentity();
 if (me) await loadRooms();
+
+// A link is an address. Handle it on arrival and whenever it changes, so pasting one into
+// the bar does what pressing a card does.
+addEventListener("hashchange", () => { openAddressedRoom(); });
+await openAddressedRoom();
 </script>

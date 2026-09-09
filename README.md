@@ -15,10 +15,26 @@ sample-room/   optional local infrastructure, so the site has something to point
 ```
 
 **`web/` does not host rooms.** It holds a key, joins rooms, and gives you a way to work
-inside one. A room is addressed, never configured: `{roomDid, host}` off the URL, so the
-site works against a room it has never seen, hosted by a VTC it does not know. That is the
-whole of "one site, any number of rooms", and it only stays true if the site has no
-special path for the room shipped beside it.
+inside one. A room is addressed, never configured:
+
+```
+#/room/<roomDid>?at=<host url>
+```
+
+Paste one of those and the site works against a room it has never seen, on a host it does
+not know — provided you hold credentials for it. That is the whole of "one site, any number
+of rooms", and it only stays true if the site has no special path for the room shipped
+beside it.
+
+**The two halves of that claim are not equally true, and the difference is the honest
+boundary of what this demonstrates.** Working *in* a room is host-only — list, get, put,
+curate, the epoch chain — and a host needs nothing but the request: a signed document and a
+chain the room issued. So that half works against any host, from a link. **Admission does
+not.** It needs the room's owner, who is reachable over DIDComm at the mediator the room
+advertises — and a `did:key` room advertises nothing, because a `did:key` has no service
+block. A real room mints `did:webvh` for exactly that reason. Until the demo's rooms do
+too, you can be handed a room you already hold keys for, but you cannot be let into one the
+site was not told about.
 
 **`sample-room/` exists so the demo runs standalone**, and for no other reason. It plays
 the two parts that live elsewhere in a real deployment:
