@@ -123,11 +123,14 @@
       <code>read</code> to list, <code>write</code> to store. It stores ciphertext and has
       no code path that could read it.</p>
     <p><strong>Try this first.</strong> Join a room as <code>alice</code>, write something,
-      then switch to <code>bob</code> and join too. Bob cannot read what Alice wrote — his
-      key chain reaches back only to the epoch he joined at, which is what
-      <code>FromJoin</code> means and why the two numbers above are not one number. Switch
-      back to Alice: she applies the commit Bob's arrival made, and still reads her own
-      record, because she was there when it was written.</p>
+      then switch to <code>bob</code> and join too. Bob reads what Alice wrote before he
+      arrived — not because the host handed him anything readable, but because he walked
+      the <em>epoch key chain</em>: each rung seals one epoch's key under its successor's,
+      and a holder of the current key walks backwards down them. Watch
+      <code>earliest readable</code> go to 1 the moment the rungs arrive.</p>
+    <p>Backwards only, and that is the property rather than a limit: a rung lets you go down
+      from a key you hold, never up to one you do not — which is what makes a removal
+      forward-only. Somebody removed at epoch 7 cannot climb to 8.</p>
     <p><strong>Then this.</strong> Retract a record in each room. The Workshop grants
       <code>curate</code> and the Library does not, so the same button works in one and is
       refused in the other — refused <em>in this tab</em>, before any request is made,
@@ -139,10 +142,8 @@
       pretended — the credentials are real and the ceremony is the same either side of the
       decision.</p>
     <p><strong>Deliberately absent.</strong> The <code>private</code> tier, whose subject
-      binding needs a zero-knowledge profile the working group has not settled. And the
-      epoch key chain: this room advances epochs without minting rungs, so you can read
-      from where you joined and no further. That is honest <code>FromJoin</code>
-      behaviour, and it is what the two numbers above are telling you.</p>
+      binding needs a zero-knowledge profile the working group has not settled — a demo
+      tier that quietly behaved like this one would misrepresent it.</p>
     <p id="log"></p>
   </section>
 </main>
@@ -314,6 +315,16 @@ async function join(roomId, roomDid) {
     membership: out.membership, authority: out.authority,
   });
 
+  // The Welcome carries the group as it stands, not its history. The rungs are a separate
+  // delivery and a separate act — asked of the host, by the member, after the join.
+  const rungs = await fetchChain().catch(() => 0);
+  if (rungs) {
+    mine.push(`epoch key chain fetched — ${rungs} rung(s), so the room's history opens`);
+    S.set(key("room:" + roomId), {
+      ...S.get(key("room:" + roomId)), snapshot: member.snapshot(),
+    });
+  }
+
   $("steps").innerHTML =
       `<li class="who">the owner</li>` + out.steps.map(s => `<li>${s}</li>`).join("")
     + `<li class="who">this browser</li>` + mine.map(s => `<li>${s}</li>`).join("");
@@ -331,13 +342,44 @@ async function openRoom(roomId) {
   currentRoomDid = held.roomDid;
 
   const applied = await catchUp(roomId, held);
+  // Rungs minted while this member was away arrive the same way the commits did.
+  const rungs = await fetchChain().catch(() => 0);
+  if (applied || rungs) {
+    S.set(key("room:" + roomId), {
+      ...S.get(key("room:" + roomId)), snapshot: member.snapshot(),
+    });
+  }
   $("steps").innerHTML = "<li>restored from this browser — no key left it</li>"
     + (applied
         ? `<li>applied ${applied} commit(s) — somebody joined while you were away</li>`
-        : "");
+        : "")
+    + (rungs ? `<li>epoch key chain: ${rungs} rung(s)</li>` : "");
   $("join-panel").classList.remove("hide");
   showEpochs();
   await loadRecords();
+}
+
+/// Fetch the room's epoch key chain and hand it to this member.
+///
+/// **This is what makes a room's history readable.** Records are sealed under the epoch
+/// current when they were written, and a member joining at epoch 5 holds only epoch 5's
+/// key — so without this they can read what happens next and nothing that came before.
+/// Each rung seals one epoch's key under its successor's, and a holder of the current key
+/// walks *backwards* down them.
+///
+/// Backwards only, and that is the property rather than a limitation: a rung lets you go
+/// down from a key you hold, never up to one you do not, which is what keeps a removal
+/// forward-only. Somebody removed at epoch 7 cannot climb to 8.
+///
+/// Asked of the **host**, which stores the rungs as ciphertext it cannot read — the key
+/// that opens one is the storage key of the epoch it names, and no host ever holds that.
+/// What a host learns from a rung is that an epoch happened, which it knew already.
+async function fetchChain() {
+  const { links } = await hostTask(
+    "https://trusttasks.org/spec/rooms/epoch/chain/0.1", "read", {});
+  if (!links?.length) return 0;
+  member.addLinks(JSON.stringify(links));
+  return links.length;
 }
 
 /// Apply every commit made since this member last looked.

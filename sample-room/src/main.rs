@@ -42,6 +42,8 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD as B64;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 use vti_rooms::mls::RoomGroup;
+use vti_rooms::sealed::SealedRoom;
+use vti_rooms::wire::EpochLink;
 
 use crate::owner::RoomIdentity;
 
@@ -92,9 +94,17 @@ struct Room {
     /// committer *inside the group*. It confers nothing on a non-member, and a member who
     /// is entitled to the room is entitled to its history of membership changes.
     commits: Vec<CommittedEpoch>,
-    /// The owner's MLS group. Every admission commits, which advances the epoch — which is
-    /// why members must apply commits or lose the ability to open anything newer.
-    group: RoomGroup,
+    /// The room's group **and its epoch key chain**.
+    ///
+    /// `SealedRoom` rather than a bare `RoomGroup`, and that is the whole of what makes a
+    /// room's history readable. Every admission commits and every commit advances the
+    /// epoch; sealing the outgoing epoch's key under the incoming one — a *rung* — is what
+    /// lets a member who arrives at epoch 5 walk back and read epoch 2. A `RoomGroup` alone
+    /// mints no rungs, so every member could read only from where they joined.
+    ///
+    /// The walk is backwards only, which is what keeps removal forward-only: a rung lets
+    /// you go down from a key you hold, never up to one you do not.
+    room: SealedRoom,
     /// `key` → the record. Opaque: `sealed` is base64 ciphertext under a key this process
     /// never holds.
     records: BTreeMap<String, Record>,
@@ -162,8 +172,8 @@ async fn catalogue(State(rooms): State<Rooms>) -> Json<Vec<CatalogueEntry>> {
                 grants: r.member_actions.iter().map(|a| (*a).to_string()).collect(),
                 room_did: r.identity.did.clone(),
                 label: r.label.clone(),
-                epoch: (r.group.epoch() + 1) as u32,
-                members: r.group.member_count(),
+                epoch: r.room.room_epoch(),
+                members: r.room.group().member_count(),
             })
             .collect(),
     )
@@ -300,9 +310,12 @@ async fn join(
         .decode(req.key_package.as_bytes())
         .map_err(|e| (StatusCode::BAD_REQUEST, format!("key package: {e}")))?;
 
-    let change = room
-        .group
-        .add_member_from_bytes(&key_package)
+    // Returns the rung alongside the commit, because the rung can only be minted in the
+    // one moment any party holds both the outgoing epoch's key and the incoming one.
+    // Afterwards it is unrecoverable — the outgoing key is gone.
+    let (change, link) = room
+        .room
+        .add_member(&key_package)
         .map_err(|e| (StatusCode::BAD_REQUEST, format!("add member: {e}")))?;
 
     // A removal produces no Welcome; an addition always does. If this is ever `None` the
@@ -344,7 +357,7 @@ async fn join(
     // The commit advanced the epoch, so the host has to be told before the new member can
     // write anything: a record is sealed under the epoch current when it was written, and
     // a host refuses ciphertext bound to an epoch it does not know about.
-    if let Err(e) = mint_epoch(&host_url, &owner, room, epoch).await {
+    if let Err(e) = mint_epoch(&host_url, &owner, room, epoch, link.as_ref()).await {
         return Err((StatusCode::BAD_GATEWAY, e));
     }
 
@@ -479,15 +492,16 @@ async fn next_version(
 ///
 /// Needs `admin`, which is why the room issues its owner credentials of its own.
 ///
-/// No `link` yet: this sample drives `RoomGroup` directly rather than `SealedRoom`, so it
-/// never mints a rung, and the room's history is readable only from where a member joined.
-/// That is the honest `FromJoin` behaviour and the site shows it — `earliest readable`
-/// equal to `your epoch` is exactly this and not a bug.
+/// The rung travels with it. A host stores rungs it cannot read and serves them back to
+/// members, which is what lets somebody who joined at epoch 5 read epoch 2 — they walk down
+/// from the key they hold. Sending the epoch without the rung is what `FromJoin` looks
+/// like, and it is what this demo did until the owner started driving a `SealedRoom`.
 async fn mint_epoch(
     host_url: &str,
     owner: &RoomIdentity,
     room: &Room,
     epoch: u32,
+    link: Option<&EpochLink>,
 ) -> Result<(), String> {
     let presentation = owner
         .present(&room.owner_authority, &room.owner_membership, "admin")
@@ -496,7 +510,17 @@ async fn mint_epoch(
         "id": format!("urn:uuid:{}", uuid::Uuid::new_v4()),
         "type": "https://trusttasks.org/spec/rooms/epoch/mint/0.1",
         "issuedAt": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
-        "payload": { "roomId": room.identity.did, "epoch": epoch, "presentation": presentation },
+        "payload": {
+            "roomId": room.identity.did,
+            "epoch": epoch,
+            "presentation": presentation,
+            // The rung for this advance. Ciphertext to the host — the key that opens it is
+            // the storage key of the epoch it names, which no host ever holds. What a host
+            // learns from a rung is that an epoch happened, which it knew already.
+            //
+            // Absent for a room's first epoch, which has no predecessor to wrap.
+            "link": link,
+        },
     });
     let signed = owner.sign_document(document).await?;
 
@@ -590,6 +614,11 @@ async fn main() {
         // leave.
         let identity = RoomIdentity::mint().expect("mint the room's identity");
         let group = RoomGroup::create(&identity.did).expect("create the demo room group");
+        // Paired with the room's identifier here rather than earlier: a rung is bound to
+        // its room in its associated data, and the group deliberately does not know which
+        // room it is for — the same separation that put `room_id` on `SealedRoom` for
+        // sealing records.
+        let room = SealedRoom::new(identity.did.clone(), group);
         // The room grants its owner everything, including `admin` — which is what lets the
         // owner mint an epoch at the host. Issued by the room, like every other authority
         // in it: an owner acting without a credential would be a back door.
@@ -619,12 +648,12 @@ async fn main() {
                 id: id.to_string(),
                 label: label.to_string(),
                 identity,
+                room,
                 member_actions,
                 owner_membership,
                 owner_authority,
                 spent_invitations: Vec::new(),
                 commits: Vec::new(),
-                group,
                 records: BTreeMap::new(),
                 next_version: 1,
             },
