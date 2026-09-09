@@ -59,8 +59,8 @@ use affinidi_tdk::messaging::config::ATMConfig;
 use affinidi_tdk::messaging::profiles::ATMProfile;
 use futures_lite::StreamExt as _;
 
-use crate::admission::{self, Refusal};
 use crate::Demo;
+use crate::admission::{self, Refusal};
 
 /// Connect the owner to `mediator_did`, once per room it holds, and answer admission
 /// requests until the process ends.
@@ -180,8 +180,16 @@ async fn dispatch(
                 answer_tsp(&demo, &atm, &profile, &mediator_did, &sender, &frame).await;
             }
             _ => {
-                answer_didcomm(&demo, &atm, &profile, &room_did, &mediator_did, &sender, &frame)
-                    .await;
+                answer_didcomm(
+                    &demo,
+                    &atm,
+                    &profile,
+                    &room_did,
+                    &mediator_did,
+                    &sender,
+                    &frame,
+                )
+                .await;
             }
         }
 
@@ -360,6 +368,13 @@ async fn handle(
             let invitation =
                 admission::issue_invitation(demo, &req.room_did, &req.member_did).await?;
             Ok((admission::INVITATION.to_string(), invitation))
+        }
+        admission::REQUEST_COMMITS => {
+            let req = admission::verify_request(body, Some(sender)).await?;
+            let since = req.since_epoch.unwrap_or(0);
+            let commits =
+                admission::commits_since(demo, &req.room_did, &req.member_did, since).await?;
+            Ok((admission::COMMITS.to_string(), commits))
         }
         admission::REQUEST_ADMISSION => {
             let req = admission::verify_request(body, Some(sender)).await?;

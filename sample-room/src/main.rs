@@ -6,15 +6,16 @@
 //! not know the difference, and the moment it needs to, the demo has stopped demonstrating
 //! anything.
 //!
-//! The two parts it plays:
+//! The one part it plays:
 //!
 //! - the room's **owner**, who admits people. Admission has to invert for a browser: the
 //!   published ceremony has the owner call `rooms/keys/key-package` *on the member's VTA*
 //!   and push a Welcome to it, and a tab has no DIDComm address and no inbox. So the
 //!   browser mints its KeyPackage locally and **pulls** the Welcome from `POST /api/join`.
-//! - the room's **host**, who stores what members write. It stores ciphertext and cannot
-//!   read a byte of it — that is not a demo shortcut, it is the property being shown, and
-//!   the `/api/records` handlers below have no way to decrypt even if they wanted to.
+//! It is **not** the host. It used to carry a fallback record API for when `room-host` was
+//! not running, and that is gone: records go to the real host and nowhere else, so there is
+//! no longer any path in this demo where something stands in for storage rather than being
+//! it.
 //!
 //! Everything else the site does — holding the group, sealing, opening, walking the epoch
 //! chain — happens in the browser, in the same `vti-rooms` this binary links, compiled to
@@ -35,11 +36,10 @@ mod owner;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use axum::extract::{Path, State};
-use axum::http::StatusCode;
-use axum::routing::{get, post};
+use axum::extract::State;
+use axum::routing::get;
 use axum::{Json, Router};
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use tokio::sync::Mutex;
 use vti_rooms::mls::RoomGroup;
 use vti_rooms::sealed::SealedRoom;
@@ -72,6 +72,13 @@ pub(crate) struct Room {
     /// A room whose owner could act without a credential would be a room with a back door.
     owner_membership: String,
     owner_authority: String,
+    /// Everybody this room has issued membership to.
+    ///
+    /// Kept because a room has to be able to tell a member from a stranger *after* admission
+    /// as well as during it. The MLS group knows too — the DIDs are in its leaf credentials —
+    /// but reaching into it to ask means the group answering a question about governance,
+    /// which is the room's to answer.
+    pub(crate) members: Vec<String>,
     /// Invitations already spent, by credential id.
     ///
     /// The owner's half of single-use. The member enforces it too, in their own browser,
@@ -105,13 +112,6 @@ pub(crate) struct Room {
     /// The walk is backwards only, which is what keeps removal forward-only: a rung lets
     /// you go down from a key you hold, never up to one you do not.
     pub(crate) room: SealedRoom,
-    /// `key` → the record. Opaque: `sealed` is base64 ciphertext under a key this process
-    /// never holds.
-    records: BTreeMap<String, Record>,
-    /// Monotonic **per room**, not per record — one comparable number is what an
-    /// incremental-sync watermark needs, and per-record counters are not comparable to
-    /// each other.
-    next_version: u64,
 }
 
 /// One commit and the epoch it produced.
@@ -122,18 +122,6 @@ pub(crate) struct CommittedEpoch {
     pub(crate) epoch: u32,
     /// The commit, base64url.
     pub(crate) commit: String,
-}
-
-#[derive(Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-struct Record {
-    key: String,
-    version: u64,
-    /// The sealed content, exactly as the member's browser produced it.
-    sealed: serde_json::Value,
-    /// Who wrote it. Visible because this is an `attributed` room: the host learns *that* a
-    /// member acted, never *what* they wrote.
-    author: String,
 }
 
 /// Everything the sample holds: the rooms, the owner that governs them, and where their
@@ -201,205 +189,6 @@ async fn catalogue(State(demo): State<Rooms>) -> Json<Vec<CatalogueEntry>> {
     )
 }
 
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct InviteRequest {
-    /// The DID to admit. Told to the owner out of band — which is the point: admission is
-    /// a decision somebody makes about somebody, not a form a stranger fills in.
-    did: String,
-}
-
-/// Issue an invitation, over HTTP.
-///
-/// **The weaker of the two carriers, and deliberately the one for the sample's own
-/// catalogue.** It takes the asker's DID as a *claim*: there is no transport identity to
-/// check it against, so anybody who can reach this port can have an invitation minted naming
-/// anybody. That is fine for a local demo whose rooms admit all comers, and it is not the
-/// path a stranger uses — [`crate::mediator`] is, and there the request carries a proof of
-/// the room key and a binding to the connection it arrived on.
-///
-/// Both call the same [`crate::admission::issue_invitation`], so the credential is identical
-/// and neither carrier holds a rule the other does not.
-async fn invite(
-    State(demo): State<Rooms>,
-    Path(room_id): Path<String>,
-    Json(req): Json<InviteRequest>,
-) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    // The catalogue addresses rooms by slug; admission addresses them by DID, because that
-    // is all a member has. Translate here rather than teaching admission about slugs.
-    let room_did = {
-        let rooms = demo.rooms.lock().await;
-        rooms
-            .get(&room_id)
-            .map(|r| r.identity.did.clone())
-            .ok_or((StatusCode::NOT_FOUND, format!("no room `{room_id}`")))?
-    };
-
-    admission::issue_invitation(&demo, &room_did, &req.did)
-        .await
-        .map(Json)
-        .map_err(|r| (r.status(), r.message))
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct JoinRequest {
-    /// The visitor's own room `did:key`, minted in their browser.
-    did: String,
-    /// Their KeyPackage, base64url — the public half of an identity they keep privately.
-    key_package: String,
-    /// The invitation this room issued them.
-    invitation: serde_json::Value,
-}
-
-/// Admit a member, over HTTP.
-///
-/// The same caveat as [`invite`]: `did` is a claim here, where over DIDComm it is proved by
-/// the request's own `eddsa-jcs-2022` proof. The invitation check catches most of what that
-/// would — an invitation names one subject and is not transferable — but "most of" is the
-/// honest word, and the DIDComm carrier is the one with the property.
-async fn join(
-    State(demo): State<Rooms>,
-    Path(room_id): Path<String>,
-    Json(req): Json<JoinRequest>,
-) -> Result<Json<admission::Admitted>, (StatusCode, String)> {
-    let room_did = {
-        let rooms = demo.rooms.lock().await;
-        rooms
-            .get(&room_id)
-            .map(|r| r.identity.did.clone())
-            .ok_or((StatusCode::NOT_FOUND, format!("no room `{room_id}`")))?
-    };
-
-    let request = admission::AdmissionRequest {
-        room_did,
-        member_did: req.did.clone(),
-        // No transport identity on this carrier. Named as the member's own DID rather than
-        // left empty so the field never reads as "some other party sent this".
-        transport_did: req.did,
-        key_package: Some(req.key_package),
-        invitation: Some(req.invitation),
-    };
-
-    admission::admit(&demo, &request)
-        .await
-        .map(Json)
-        .map_err(|r| (r.status(), r.message))
-}
-
-async fn list_records(
-    State(rooms): State<Rooms>,
-    Path(room_id): Path<String>,
-) -> Result<Json<Vec<Record>>, (StatusCode, String)> {
-    let rooms = rooms.rooms.lock().await;
-    let room = rooms
-        .get(&room_id)
-        .ok_or((StatusCode::NOT_FOUND, format!("no room `{room_id}`")))?;
-    Ok(Json(room.records.values().cloned().collect()))
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct PutRecord {
-    /// The sealed content the member's browser produced. The version bound *inside* it must
-    /// be the version this store assigns, or the record stores fine and never opens — which
-    /// is why the browser asks for the version first and seals against the answer.
-    sealed: serde_json::Value,
-    expected_version: u64,
-    author: String,
-}
-
-async fn put_record(
-    State(rooms): State<Rooms>,
-    Path((room_id, key)): Path<(String, String)>,
-    Json(req): Json<PutRecord>,
-) -> Result<Json<Record>, (StatusCode, String)> {
-    let mut rooms = rooms.rooms.lock().await;
-    let room = rooms
-        .get_mut(&room_id)
-        .ok_or((StatusCode::NOT_FOUND, format!("no room `{room_id}`")))?;
-
-    if req.expected_version != room.next_version {
-        return Err((
-            StatusCode::CONFLICT,
-            format!(
-                "this write sealed itself for version {} but the room is at {}. Re-read and \
-                 seal again — the version is bound into the ciphertext, so a record stored \
-                 under the wrong one would never open.",
-                req.expected_version, room.next_version
-            ),
-        ));
-    }
-
-    let record = Record {
-        key: key.clone(),
-        version: room.next_version,
-        sealed: req.sealed,
-        author: req.author,
-    };
-    room.next_version += 1;
-    room.records.insert(key, record.clone());
-    Ok(Json(record))
-}
-
-/// Commits a member has not applied yet.
-///
-/// `since` is the member's own epoch — what they are at, not what they want. Everything
-/// after it is what they missed, which is a question only they can ask because only they
-/// know where they are.
-///
-/// A member who never calls this stays readable at their own epoch and finds every newer
-/// record refusing to open. That failure is silent and reads as corruption, which is why
-/// the site catches up on open rather than waiting to be asked.
-async fn commits(
-    State(demo): State<Rooms>,
-    Path(room_id): Path<String>,
-    axum::extract::Query(q): axum::extract::Query<CommitsQuery>,
-) -> Result<Json<Vec<CommittedEpoch>>, (StatusCode, String)> {
-    let rooms = demo.rooms.lock().await;
-    let room = rooms
-        .get(&room_id)
-        .ok_or((StatusCode::NOT_FOUND, format!("no room `{room_id}`")))?;
-    Ok(Json(
-        room.commits
-            .iter()
-            .filter(|c| c.epoch > q.since)
-            .cloned()
-            .collect(),
-    ))
-}
-
-#[derive(Deserialize)]
-struct CommitsQuery {
-    since: u32,
-}
-
-/// The version a write should seal itself for.
-async fn next_version(
-    State(rooms): State<Rooms>,
-    Path(room_id): Path<String>,
-) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    let rooms = rooms.rooms.lock().await;
-    let room = rooms
-        .get(&room_id)
-        .ok_or((StatusCode::NOT_FOUND, format!("no room `{room_id}`")))?;
-    Ok(Json(serde_json::json!({ "nextVersion": room.next_version })))
-}
-
-/// Tell the host the room's epoch advanced.
-///
-/// Every membership change is a commit and every commit advances the epoch, and a record
-/// is sealed under the epoch current when it was written. A host that has not been told
-/// refuses the write — "record is sealed under epoch 2, room is at 1" — which is the host
-/// being right: it is the party that knows what version a record will be stored at, and it
-/// cannot accept ciphertext bound to an epoch it has never heard of.
-///
-/// Needs `admin`, which is why the room issues its owner credentials of its own.
-///
-/// The rung travels with it. A host stores rungs it cannot read and serves them back to
-/// members, which is what lets somebody who joined at epoch 5 read epoch 2 — they walk down
-/// from the key they hold. Sending the epoch without the rung is what `FromJoin` looks
-/// like, and it is what this demo did until the owner started driving a `SealedRoom`.
 pub(crate) async fn mint_epoch(
     host_url: &str,
     owner: &RoomIdentity,
@@ -437,7 +226,9 @@ pub(crate) async fn mint_epoch(
     let status = res.status();
     let body = res.text().await.unwrap_or_default();
     if !status.is_success() {
-        return Err(format!("the host refused the epoch mint ({status}): {body}"));
+        return Err(format!(
+            "the host refused the epoch mint ({status}): {body}"
+        ));
     }
     Ok(())
 }
@@ -485,14 +276,17 @@ async fn register_with_host(
     if !status.is_success() {
         // A host's `trust-task-error` is its ANSWER, not a broken network. Surfacing the
         // body is the difference between "the host refused, and here is why" and a number.
-        return Err(format!("the host refused to register the room ({status}): {body}"));
+        return Err(format!(
+            "the host refused to register the room ({status}): {body}"
+        ));
     }
     Ok(())
 }
 
 #[tokio::main]
 async fn main() {
-    let host_url = std::env::var("ROOM_HOST_URL").unwrap_or_else(|_| "http://127.0.0.1:8300".into());
+    let host_url =
+        std::env::var("ROOM_HOST_URL").unwrap_or_else(|_| "http://127.0.0.1:8300".into());
     // What members are told. The host's DID when there is one — `room-host --mediator-did`
     // prints it at startup — and its URL otherwise.
     let member_host = std::env::var("ROOM_HOST_DID").unwrap_or_else(|_| host_url.clone());
@@ -564,7 +358,9 @@ async fn main() {
                 // record API, and a host that is not up yet is the common case when
                 // somebody starts one process and not the other. Say which, plainly.
                 eprintln!("warning: {id} is not registered with a host — {e}");
-                eprintln!("         start `room-host --allow-origin http://127.0.0.1:8787` and restart this.");
+                eprintln!(
+                    "         start `room-host --allow-origin http://127.0.0.1:8787` and restart this."
+                );
             }
         }
 
@@ -578,10 +374,9 @@ async fn main() {
                 member_actions,
                 owner_membership,
                 owner_authority,
+                members: Vec::new(),
                 spent_invitations: Vec::new(),
                 commits: Vec::new(),
-                records: BTreeMap::new(),
-                next_version: 1,
             },
         );
     }
@@ -620,15 +415,6 @@ async fn main() {
     let web = std::env::var("DEMO_WEB_DIR").unwrap_or_else(|_| "../web".to_string());
     let app = Router::new()
         .route("/api/rooms", get(catalogue))
-        .route("/api/rooms/{room_id}/invite", post(invite))
-        .route("/api/rooms/{room_id}/join", post(join))
-        .route("/api/rooms/{room_id}/next-version", get(next_version))
-        .route("/api/rooms/{room_id}/commits", get(commits))
-        .route(
-            "/api/rooms/{room_id}/records",
-            get(list_records),
-        )
-        .route("/api/rooms/{room_id}/records/{key}", axum::routing::put(put_record))
         .layer(tower_http::cors::CorsLayer::permissive())
         .fallback_service(tower_http::services::ServeDir::new(&web))
         .with_state(rooms);

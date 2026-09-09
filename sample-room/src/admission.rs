@@ -21,17 +21,17 @@
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD as B64;
 pub use dataroom_sample_room::{
-    ADMITTED, AdmissionRequest, Admitted, INVITATION, PROTOCOL, REQUEST_ADMISSION,
-    REQUEST_INVITATION,
+    ADMITTED, AdmissionRequest, Admitted, COMMITS, INVITATION, PROTOCOL, REQUEST_ADMISSION,
+    REQUEST_COMMITS, REQUEST_INVITATION,
 };
 
 use crate::{CommittedEpoch, Demo};
 
-/// A refusal, with the code its carrier maps to.
+/// A refusal, and the code it travels as.
 ///
-/// The code is the DIDComm problem-report code — `e.p.msg.*` — because that is the
-/// vocabulary with fewer entries and a coarser one; HTTP has a status for everything and
-/// choosing there is choosing between shades. `status()` maps back the other way.
+/// `e.p.msg.*`, the DIDComm problem-report vocabulary. It used to carry a `status()` mapping
+/// to HTTP as well, for the second admission path this site had; that path is gone and so is
+/// the mapping. One admission implementation means one vocabulary for saying no.
 #[derive(Debug)]
 pub struct Refusal {
     pub code: &'static str,
@@ -66,18 +66,6 @@ impl Refusal {
 
     fn internal(message: impl Into<String>) -> Self {
         Self::new("e.p.msg.internal-error", message)
-    }
-
-    /// The HTTP status this refusal is, for the carrier that speaks in statuses.
-    pub fn status(&self) -> axum::http::StatusCode {
-        use axum::http::StatusCode;
-        match self.code {
-            "e.p.msg.bad-request" => StatusCode::BAD_REQUEST,
-            "e.p.msg.unauthorized" => StatusCode::FORBIDDEN,
-            "e.p.msg.not-found" => StatusCode::NOT_FOUND,
-            "e.p.msg.conflict" => StatusCode::CONFLICT,
-            _ => StatusCode::INTERNAL_SERVER_ERROR,
-        }
     }
 }
 
@@ -198,6 +186,52 @@ pub async fn issue_invitation(
     }))
 }
 
+/// The commits a member has not applied yet.
+///
+/// `since` is the epoch they are **at**, not the one they want: everything after it is what
+/// they missed, and that is a question only they can ask because only they know where they
+/// are.
+///
+/// # Members only, and that is not paranoia about the bytes
+///
+/// A commit confers nothing on a non-member — it is handshake material that authenticates its
+/// committer *inside* the group, and somebody outside cannot use one for anything. What it
+/// does leak is that the room exists, how often its membership changes, and how long that
+/// history is. That is the room's business, so the room decides who sees it, and the answer
+/// is "people it admitted".
+///
+/// Checked against the room's own record of whom it issued membership to, rather than against
+/// a presented credential: a member asking this has nothing to present that the owner did not
+/// issue in the first place, so asking them for it would be asking them to hand back a fact
+/// the owner already holds.
+pub async fn commits_since(
+    demo: &Demo,
+    room_did: &str,
+    member_did: &str,
+    since: u32,
+) -> Result<serde_json::Value, Refusal> {
+    let rooms = demo.rooms.lock().await;
+    let room = rooms
+        .values()
+        .find(|r| r.identity.did == room_did)
+        .ok_or_else(|| Refusal::not_found(format!("this owner holds no room `{room_did}`")))?;
+
+    if !room.members.iter().any(|m| m == member_did) {
+        return Err(Refusal::unauthorized(
+            "this room has not admitted you, so it has no history to give you",
+        ));
+    }
+
+    Ok(serde_json::json!({
+        "roomDid": room.identity.did,
+        "commits": room
+            .commits
+            .iter()
+            .filter(|c| c.epoch > since)
+            .collect::<Vec<_>>(),
+    }))
+}
+
 /// Admit a member: verify their invitation, add them to the group, and issue what governs
 /// them.
 ///
@@ -253,9 +287,7 @@ pub async fn admit(demo: &Demo, req: &AdmissionRequest) -> Result<Admitted, Refu
     invitation
         .verify_proof_with_public_key(room.identity.public_key())
         .map_err(|_| {
-            Refusal::unauthorized(
-                "that invitation's proof does not verify against this room's key",
-            )
+            Refusal::unauthorized("that invitation's proof does not verify against this room's key")
         })?;
     if room.spent_invitations.contains(&credential_id) {
         return Err(Refusal::conflict(format!(
@@ -291,6 +323,7 @@ pub async fn admit(demo: &Demo, req: &AdmissionRequest) -> Result<Admitted, Refu
     // Consumed only now, after the join succeeded. Spending it earlier would burn an
     // invitation on a failed attempt and leave the member unable to retry.
     room.spent_invitations.push(credential_id);
+    room.members.push(req.member_did.clone());
 
     // Membership and authority are separate acts because they are separate facts: being a
     // member is not being allowed to write. A demo visitor gets what the room grants and not
@@ -320,7 +353,8 @@ pub async fn admit(demo: &Demo, req: &AdmissionRequest) -> Result<Admitted, Refu
         epoch,
         membership: serde_json::from_str(&membership)
             .map_err(|e| Refusal::internal(e.to_string()))?,
-        authority: serde_json::from_str(&authority).map_err(|e| Refusal::internal(e.to_string()))?,
+        authority: serde_json::from_str(&authority)
+            .map_err(|e| Refusal::internal(e.to_string()))?,
         steps: vec![
             "invitation verified — issued by this room, to you, unspent".into(),
             "key package validated against the room's ciphersuite".into(),
@@ -377,6 +411,7 @@ mod tests {
             transport_did: transport_did.into(),
             key_package: None,
             invitation: None,
+            since_epoch: None,
         })
         .unwrap();
         let proof = affinidi_data_integrity::DataIntegrityProof::sign(
@@ -461,6 +496,7 @@ mod tests {
             transport_did: "did:peer:2.transport".into(),
             key_package: None,
             invitation: None,
+            since_epoch: None,
         })
         .unwrap();
         body.as_object_mut().unwrap().remove("proof");

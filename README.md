@@ -100,16 +100,22 @@ Production mints `did:webvh` rather than either, for a reason neither has: a roo
 controller must be able to change, and transferring ownership is a controller change.
 `did:peer` encodes its keys in the identifier, so it can never have one.
 
-**`sample-room/` exists so the demo runs standalone**, and for no other reason. It plays
-the two parts that live elsewhere in a real deployment:
+**`sample-room/` exists so the demo runs standalone**, and for no other reason. It plays one
+part that lives elsewhere in a real deployment: the **owner**, who creates a room, admits
+people, and keeps its commits so members can catch up. In a real deployment that is a person
+with a VTA, driving it from the wallet console or `pnm-cli`.
 
-- the **host**, which stores ciphertext it cannot read — in a real deployment a VTC, or
-  the standalone `room-host` binary;
-- the **owner**, who creates the room and admits people — in a real deployment a person
-  with a VTA, using the wallet console or `pnm-cli`.
+It is **not** the host. It used to carry a fallback record API for when `room-host` was not
+running, and that is gone — records go to the real host and nowhere else, so there is no
+longer any path in this demo where something stands in for storage rather than being it.
 
-If the site ever needs to know which of the two it is talking to, the demo has stopped
-demonstrating anything. The interface is the same either way.
+Over HTTP it now serves exactly two things: the page, and a catalogue of the rooms it happens
+to hold. Everything in the trust model — admission, commits, records, the epoch chain — goes
+over a mediator. There is **one** admission implementation, and clicking a card runs the same
+ceremony as pasting a DID; there used to be a second over this site's own API, and it was the
+one a card took, so the common case took the weaker route. Weaker specifically: over HTTP the
+asker's DID was a claim, where over the mediator it is proved by the request's own signature
+and bound to the connection that carried it.
 
 ## Running it
 

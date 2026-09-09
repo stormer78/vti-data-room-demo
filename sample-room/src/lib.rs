@@ -55,6 +55,29 @@ pub const REQUEST_ADMISSION: &str = "https://dataroom.demo/admission/0.1/request
 /// Owner → member: the Welcome, and what governs them.
 pub const ADMITTED: &str = "https://dataroom.demo/admission/0.1/admitted";
 
+/// Member → owner: "which commits have I missed?"
+///
+/// A separate protocol from admission, because it is a separate question. Admission asks
+/// somebody to *decide*; this asks them to *serve* something they hold — and it is asked by
+/// a member, where admission is asked by a stranger.
+///
+/// # Why the owner and not the host
+///
+/// A commit is MLS handshake material about the *group*. A host stores ciphertext and has no
+/// opinion about who is in a room, so it has no commits to give. The owner makes them, and
+/// keeps them because a browser has no inbox to be pushed to.
+///
+/// # Why a member has to ask at all
+///
+/// Every membership change is a commit and every commit advances the epoch. A member who
+/// misses one is stuck at their last epoch and can open nothing sealed after it — and the
+/// symptom is "this record does not open", which reads as corruption rather than as a message
+/// that never arrived. So this runs before anything is read, rather than waiting to be asked
+/// for.
+pub const REQUEST_COMMITS: &str = "https://dataroom.demo/commits/0.1/request";
+/// Owner → member: the commits they missed, in order.
+pub const COMMITS: &str = "https://dataroom.demo/commits/0.1/commits";
+
 /// The body of either request, before its proof is checked.
 ///
 /// One shape for both, because both answer the same three questions — which room, who is
@@ -80,6 +103,12 @@ pub struct AdmissionRequest {
     /// The invitation being presented. Only the admission request carries one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub invitation: Option<serde_json::Value>,
+    /// The epoch the asker is **at**, for a commits request.
+    ///
+    /// What they are at, not what they want: everything after it is what they missed, and
+    /// only they know where they are.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub since_epoch: Option<u32>,
 }
 
 /// What admission produces.
@@ -149,8 +178,8 @@ pub fn advertised_mediator(room_did: &str) -> Result<Option<Advertised>, String>
         return Ok(None);
     }
 
-    let parsed =
-        DID::try_from(room_did).map_err(|e| format!("`{room_did}` is not a well-formed DID: {e}"))?;
+    let parsed = DID::try_from(room_did)
+        .map_err(|e| format!("`{room_did}` is not a well-formed DID: {e}"))?;
     let doc = PeerResolver
         .resolve(&parsed)
         .ok_or_else(|| format!("`{room_did}` is not a did:peer this build resolves"))?

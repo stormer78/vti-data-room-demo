@@ -220,11 +220,15 @@ export class MediatorLink {
   /// fields either way, which is what lets one responder serve both.
   async askProtocol(to, carrier, type, body) {
     const id = crypto.randomUUID();
-    if (carrier === "tsp") {
-      const envelope = await this.#tsp(to, id, { id, type, body }, (e) => e.thid === id);
-      return { type: envelope.type, body: envelope.body };
-    }
-    const reply = await this.#didcomm(to, id, type, body);
+    // `checked` on both arms, not just DIDComm's. It was on one, and the effect was that the
+    // same refusal read as the counterparty's own words over one carrier and as "expected
+    // commits, got problem-report" over the other — the reason discarded by the layer that
+    // had it in its hand. A rule that holds on one wire and not the other is the thing this
+    // whole class is arranged to prevent.
+    const reply =
+      carrier === "tsp"
+        ? checked(await this.#tsp(to, id, { id, type, body }, (e) => e.thid === id))
+        : await this.#didcomm(to, id, type, body);
     return { type: reply.type, body: reply.body };
   }
 
@@ -245,7 +249,11 @@ export class MediatorLink {
       // A *request* needs no wrapper: its type is the document's own `type` field. A *reply*
       // does, because correlation is the one thing a document cannot carry about itself and
       // TSP has no header to carry it either.
-      const framed = await this.#tsp(to, id, document, (e) => e.thid === id);
+      // A Trust Task says no with a `trust-task-error` *document*, which the caller reads —
+      // but a counterparty that never got as far as dispatching one answers with a
+      // problem-report, and that has to surface too rather than arriving as an undefined
+      // document.
+      const framed = checked(await this.#tsp(to, id, document, (e) => e.thid === id));
       return framed.document;
     }
     const reply = await this.#didcomm(to, id, TRUST_TASK_ENVELOPE, document);

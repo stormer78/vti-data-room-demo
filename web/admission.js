@@ -32,6 +32,15 @@ export const INVITATION = "https://dataroom.demo/admission/0.1/invitation";
 export const REQUEST_ADMISSION = "https://dataroom.demo/admission/0.1/request-admission";
 export const ADMITTED = "https://dataroom.demo/admission/0.1/admitted";
 
+/// Member → owner: "which commits have I missed?"
+///
+/// Every membership change is a commit and every commit advances the epoch, so a member who
+/// misses one is stuck at their last epoch and can open nothing sealed after it. The symptom
+/// is "this record does not open" — corruption, to a reader — which is why this is asked
+/// before anything is read rather than when somebody notices.
+export const REQUEST_COMMITS = "https://dataroom.demo/commits/0.1/request";
+export const COMMITS = "https://dataroom.demo/commits/0.1/commits";
+
 /// Build the body of a request and have the **room** identity sign it.
 ///
 /// Signed in wasm, so the key that will later sign records is the key that asks — and its
@@ -63,4 +72,20 @@ export async function requestAdmission(link, carrier, roomDid, identity, keyPack
   );
   if (reply.type !== ADMITTED) throw new Error(`expected admission, got ${reply.type}`);
   return reply.body;
+}
+
+/// Ask the owner which commits this member has missed.
+///
+/// A different protocol from admission because it is a different question — admission asks
+/// somebody to *decide*, this asks them to serve something they hold — and asked by a member
+/// rather than a stranger.
+export async function requestCommits(link, carrier, roomDid, identity, sinceEpoch) {
+  const reply = await link.askProtocol(
+    roomDid,
+    carrier,
+    REQUEST_COMMITS,
+    signedRequest(identity, roomDid, link.transportDid, { sinceEpoch }),
+  );
+  if (reply.type !== COMMITS) throw new Error(`expected commits, got ${reply.type}`);
+  return reply.body.commits ?? [];
 }

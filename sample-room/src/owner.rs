@@ -69,7 +69,9 @@ pub struct RoomIdentity {
 /// A room here is nowhere near that ceiling, so it uses the convention rather than the
 /// workaround.
 fn vta_peer_service(mediator_did: &str) -> Vec<affinidi_tdk::dids::PeerService> {
-    use affinidi_tdk::dids::{OneOrMany, PeerService, PeerServiceEndpoint, PeerServiceEndpointLong};
+    use affinidi_tdk::dids::{
+        OneOrMany, PeerService, PeerServiceEndpoint, PeerServiceEndpointLong,
+    };
 
     let at_mediator = |type_: &str, accept: Vec<String>| PeerService {
         type_: type_.into(),
@@ -276,7 +278,10 @@ impl RoomIdentity {
     /// A host takes the presenter from the document's own proof and never from a payload
     /// field — a payload says what is being asked, not who is asking — so this is how the
     /// owner is authenticated when it registers a room.
-    pub async fn sign_document(&self, document: serde_json::Value) -> Result<serde_json::Value, String> {
+    pub async fn sign_document(
+        &self,
+        document: serde_json::Value,
+    ) -> Result<serde_json::Value, String> {
         let mut doc = document;
         // A proof never covers itself.
         doc.as_object_mut()
@@ -291,7 +296,10 @@ impl RoomIdentity {
         .map_err(|e| format!("sign the document: {e}"))?;
         doc.as_object_mut()
             .ok_or("a signable document must be a JSON object")?
-            .insert("proof".into(), serde_json::to_value(&proof).map_err(|e| e.to_string())?);
+            .insert(
+                "proof".into(),
+                serde_json::to_value(&proof).map_err(|e| e.to_string())?,
+            );
         Ok(doc)
     }
 
@@ -378,8 +386,14 @@ mod tests {
             .expect("a did:peer resolves")
             .expect("a room with a mediator advertises one");
         assert_eq!(advertised.mediator, mediator);
-        assert!(advertised.tsp, "a room must say it serves TSP to be asked over it");
-        assert!(advertised.didcomm, "and DIDComm, for a member that cannot do TSP");
+        assert!(
+            advertised.tsp,
+            "a room must say it serves TSP to be asked over it"
+        );
+        assert!(
+            advertised.didcomm,
+            "and DIDComm, for a member that cannot do TSP"
+        );
         assert_eq!(
             advertised.preferred(),
             Some("tsp"),
@@ -405,6 +419,7 @@ mod tests {
     /// invitation through the same six clauses a browser member runs, and the authority
     /// through `verify_chain` after a member has narrowed it.
     #[tokio::test]
+
     async fn the_room_issues_credentials_its_members_can_use() {
         let room = RoomIdentity::mint(None).unwrap();
         let member = "did:key:z6MkiTBz1ymuepAQ4HEHYSF1H8quG5GLVVQR3djdX3mDooWp";
@@ -417,13 +432,20 @@ mod tests {
             .expect("the room's own invitation must verify against the room's own key");
         assert_eq!(vic.issuer(), room.did);
         assert_eq!(vic.subject(), member);
-        assert!(vic.id().is_some(), "without an id, single-use cannot be enforced");
+        assert!(
+            vic.id().is_some(),
+            "without an id, single-use cannot be enforced"
+        );
 
         // The authority credential is a chain root a member narrows from, and the ceiling
         // for everything below it.
-        let vac: DTGCredential =
-            serde_json::from_str(&room.issue_authority(member, &["read", "write"]).await.unwrap())
-                .unwrap();
+        let vac: DTGCredential = serde_json::from_str(
+            &room
+                .issue_authority(member, &["read", "write"])
+                .await
+                .unwrap(),
+        )
+        .unwrap();
         assert_eq!(vac.issuer(), room.did);
         assert_eq!(vac.subject(), member);
 
@@ -449,5 +471,74 @@ mod tests {
             "attenuation must refuse to widen: `curate` was never granted"
         );
         let _ = leaf;
+    }
+
+    /// A room's history of membership changes goes to its members, and to nobody else.
+    ///
+    /// Not because a commit is dangerous — it authenticates its committer *inside* the group
+    /// and confers nothing outside it — but because how often a room's membership changes is
+    /// the room's business. The check is against whom the room admitted, which is a fact it
+    /// holds rather than one it has to be shown.
+    #[tokio::test]
+    async fn a_room_serves_its_commits_to_members_and_refuses_a_stranger() {
+        use crate::{CommittedEpoch, Demo, Room};
+        use std::collections::BTreeMap;
+
+        let owner = RoomIdentity::mint(None).unwrap();
+        let identity = RoomIdentity::mint(None).unwrap();
+        let room_did = identity.did.clone();
+        let group = vti_rooms::mls::RoomGroup::create(&room_did).unwrap();
+
+        let mut rooms = BTreeMap::new();
+        rooms.insert(
+            "r".to_string(),
+            Room {
+                id: "r".into(),
+                label: "R".into(),
+                room: vti_rooms::sealed::SealedRoom::new(room_did.clone(), group),
+                identity,
+                member_actions: &["read"],
+                owner_membership: String::new(),
+                owner_authority: String::new(),
+                members: vec!["did:key:zMember".into()],
+                spent_invitations: Vec::new(),
+                commits: vec![
+                    CommittedEpoch {
+                        epoch: 2,
+                        commit: "two".into(),
+                    },
+                    CommittedEpoch {
+                        epoch: 3,
+                        commit: "three".into(),
+                    },
+                ],
+            },
+        );
+        let demo = Demo {
+            owner,
+            host_url: String::new(),
+            member_host: String::new(),
+            rooms: tokio::sync::Mutex::new(rooms),
+        };
+
+        // A member gets only what they are behind on — `since` is where they are, not what
+        // they want, and everything after it is what they missed.
+        let out = crate::admission::commits_since(&demo, &room_did, "did:key:zMember", 2)
+            .await
+            .expect("a member may read the room's history");
+        let commits = out["commits"].as_array().unwrap();
+        assert_eq!(commits.len(), 1, "only what came after epoch 2");
+        assert_eq!(commits[0]["epoch"], 3);
+
+        // From epoch 0 they get all of it.
+        let all = crate::admission::commits_since(&demo, &room_did, "did:key:zMember", 0)
+            .await
+            .unwrap();
+        assert_eq!(all["commits"].as_array().unwrap().len(), 2);
+
+        let refused = crate::admission::commits_since(&demo, &room_did, "did:key:zStranger", 0)
+            .await
+            .expect_err("a room this DID was never admitted to has no history for it");
+        assert_eq!(refused.code, "e.p.msg.unauthorized");
     }
 }

@@ -164,7 +164,7 @@
 
 <script type="module">
 import init, { mintKeyPackage, verifyInvitation, Identity, RoomMember } from "./vendor/vti_rooms.js";
-import { requestAdmission, requestInvitation } from "./admission.js";
+import { requestAdmission, requestCommits, requestInvitation } from "./admission.js";
 import { advertised, closeLinks, linkTo, mintTransportIdentity } from "./carrier.js";
 
 // The module is ~1.9 MB and every handler below depends on it, so the buttons stay
@@ -325,7 +325,7 @@ async function openAddressedRoom() {
 /// and one that named its host could never move — so somebody has to say. For a listed room
 /// that is the catalogue; for an addressed one it is the `?at=` in the link.
 let catalogue = [];
-const hostFor = (roomId) => catalogue.find((r) => r.roomId === roomId)?.host;
+const hostForDid = (roomDid) => catalogue.find((r) => r.roomDid === roomDid)?.host;
 
 async function loadRooms() {
   const rooms = await (await fetch("/api/rooms")).json();
@@ -342,93 +342,22 @@ async function loadRooms() {
     const b = document.createElement("button");
     b.className = held ? "ghost" : "";
     b.textContent = held ? "Open" : "Ask to join";
-    b.onclick = () => held ? openRoom(r.roomDid) : join(r.roomId, r.roomDid);
+    b.onclick = () => held ? openRoom(r.roomDid) : joinByDid(r.roomDid);
     el.append(b);
     $("rooms").append(el);
   }
 }
 
-async function join(roomId, roomDid) {
-  const mine = [];   // what THIS browser checked, as against what the owner reports
-
-  // 1 · Tell the owner who you are, and get back an invitation naming you.
-  //     Out of band in reality — a DID pasted into a message. The owner deciding is
-  //     the whole of admission; that this demo always says yes is stated, not hidden.
-  log("asking the owner for an invitation…");
-  const inviteRes = await fetch(`/api/rooms/${roomId}/invite`, {
-    method: "POST", headers: { "content-type": "application/json" },
-    body: JSON.stringify({ did: me.did }),
-  });
-  if (!inviteRes.ok) { log("refused: " + await inviteRes.text()); return; }
-  const { invitation } = await inviteRes.json();
-  const vic = JSON.stringify(invitation);
-
-  // 2 · Check it before acting on it. Six clauses, in wasm: it is an invitation, this
-  //     room issued it, it names me, the signing key belongs to that issuer, the proof
-  //     verifies, and I have not spent it. The fourth is the one that was missing
-  //     upstream — without it anyone can forge an invitation to any room.
-  let credentialId;
-  try {
-    credentialId = verifyInvitation(vic, roomDid, me.did, spent());
-    mine.push("invitation verified — issued by this room, to me, signed by its own key, unspent");
-  } catch (e) {
-    log("this invitation does not check out: " + (e.message ?? e));
-    return;
-  }
-
-  // 3 · Mint a KeyPackage — gated on that same invitation, because minting retains a
-  //     private key against a Welcome that may never come.
-  const minted = mintKeyPackage(me.did, roomDid, vic, spent());
-  const { keyPackage } = JSON.parse(minted);
-  mine.push("key package minted — one per room, never reused");
-
-  // 4 · Present the invitation and the KeyPackage together.
-  const res = await fetch(`/api/rooms/${roomId}/join`, {
-    method: "POST", headers: { "content-type": "application/json" },
-    body: JSON.stringify({ did: me.did, keyPackage, invitation }),
-  });
-  if (!res.ok) { log("refused: " + await res.text()); return; }
-  const out = await res.json();
-
-  // 5 · Accept the Welcome — the invitation is checked again here, then spent.
-  member = RoomMember.join(roomDid, minted, b64u.dec(out.welcome), vic, spent());
-  markSpent(credentialId);
-  mine.push("welcome accepted in this tab — the group key never left the owner unsealed");
-  mine.push("invitation spent — it will not work a second time");
-
-  currentRoomDid = roomDid;
-  // Keyed by the room's DID, because that is the room's identifier. `slug` rides along
-  // only because this sample's OWNER routes on it — the host never sees it, and a room
-  // addressed by URL has none, which is why every use of it below is conditional.
-  S.set(key("room:" + roomDid), {
-    snapshot: member.snapshot(), roomDid, host: hostFor(roomId) ?? SAMPLE_HOST, slug: roomId,
-    membership: out.membership, authority: out.authority,
-  });
-
-  // The Welcome carries the group as it stands, not its history. The rungs are a separate
-  // delivery and a separate act — asked of the host, by the member, after the join.
-  const rungs = await fetchChain().catch(() => 0);
-  if (rungs) {
-    mine.push(`epoch key chain fetched — ${rungs} rung(s), so the room's history opens`);
-    S.set(key("room:" + roomDid), {
-      ...S.get(key("room:" + roomDid)), snapshot: member.snapshot(),
-    });
-  }
-
-  $("steps").innerHTML =
-      `<li class="who">the owner</li>` + out.steps.map(s => `<li>${s}</li>`).join("")
-    + `<li class="who">this browser</li>` + mine.map(s => `<li>${s}</li>`).join("");
-  $("join-panel").classList.remove("hide");
-  showEpochs();
-  await loadRecords();
-  await loadRooms();
-  log("");
-}
-
-/// Join a room over **DIDComm**, knowing nothing but its DID.
+/// Join a room, knowing nothing but its DID.
 ///
-/// The same six steps `join` takes, over a carrier that does not need this site to have
-/// been told anything. The differences are worth naming, because they are the point:
+/// **The only way in**, whether you clicked a card or pasted an identifier, and that is the
+/// point rather than a tidy-up. There used to be a second path over this site's own HTTP API,
+/// and it was the one a card used — so the common case took the weaker route. Weaker
+/// specifically: over HTTP the asker's DID is a claim, where here it is proved by the
+/// request's own signature and bound to the connection that carried it. Two admission
+/// implementations with different security properties is how the better one ends up unused.
+///
+/// What it needs from this site is nothing:
 ///
 /// - the room is found by **resolving its identifier**, not by looking it up in a
 ///   catalogue. A `did:peer:2` carries the mediator its owner listens on, and resolving one
@@ -495,11 +424,13 @@ async function joinByDid(roomDid) {
     mine.push("welcome accepted in this tab — the group key never left the owner unsealed");
     mine.push("invitation spent — it will not work a second time");
 
-    // No slug: this room was addressed, not listed, and the sample's own routing is the
-    // only thing a slug was ever for. The host is asked for, because admission says
-    // nothing about where records live — a room's owner and its host are two parties.
+    // No slug anywhere any more: nothing routes on one. The host is recorded because
+    // admission says nothing about where records live — a room's owner and its host are two
+    // parties, and a room may be served by several hosts, so its identifier deliberately
+    // names none of them. From the link if there is one, else from the catalogue.
     S.set(key("room:" + roomDid), {
-      snapshot: member.snapshot(), roomDid, host: roomFromUrl()?.host ?? SAMPLE_HOST,
+      snapshot: member.snapshot(), roomDid,
+      host: roomFromUrl()?.host ?? hostForDid(roomDid) ?? SAMPLE_HOST,
       membership: out.membership, authority: out.authority,
     });
 
@@ -582,23 +513,22 @@ async function fetchChain() {
 /// member's agent over DIDComm; the same inversion the invitation forced applies here.
 async function catchUp(held) {
   // Commits come from the room's OWNER, not its host — a host stores ciphertext and has no
-  // opinion about the group. This sample's owner routes on a slug; a room addressed by URL
-  // has none, so catching up is simply unavailable and the member will find newer records
-  // refusing to open. That is the gap, stated rather than papered over: reaching an owner
-  // needs the room to advertise a mediator.
-  if (!held.slug) return 0;
+  // opinion about who is in a room, so it has none to give. Asked over the same mediator the
+  // owner was reached at to be admitted, which is what makes this work for a room that was
+  // addressed rather than listed. It used to route on this sample's own slug, so a room you
+  // were handed a link to could never catch up: you would join, fall behind at the next
+  // admission, and find records refusing to open with nothing to say why.
+  const { link, carrier } = await connect(held.roomDid);
+  const commits = await requestCommits(link, carrier, held.roomDid, identity, member.epoch);
+  if (!commits.length) return 0;
 
-  const missed = await (await fetch(
-    `/api/rooms/${held.slug}/commits?since=${member.epoch}`)).json();
-  if (!missed.length) return 0;
-
-  for (const c of missed) {
+  for (const c of commits) {
     // Each returns the epoch rung it produced. Applied in order — a commit is only
     // meaningful against the epoch immediately before it.
     member.applyCommit(b64u.dec(c.commit));
   }
   S.set(key("room:" + held.roomDid), { ...held, snapshot: member.snapshot() });
-  return missed.length;
+  return commits.length;
 }
 
 function showEpochs() {

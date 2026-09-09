@@ -109,8 +109,13 @@ async fn main() -> Result<(), String> {
         if advertised.tsp { " TSP" } else { "" },
         if advertised.didcomm { " DIDComm" } else { "" },
     );
-    let client =
-        Client::connect(&mediator, &transport_did, transport_secrets, carrier == "tsp").await?;
+    let client = Client::connect(
+        &mediator,
+        &transport_did,
+        transport_secrets,
+        carrier == "tsp",
+    )
+    .await?;
 
     // 3. Ask.
     let request = member
@@ -120,6 +125,7 @@ async fn main() -> Result<(), String> {
             transport_did: transport_did.clone(),
             key_package: None,
             invitation: None,
+            since_epoch: None,
         })
         .await?;
     let reply = client
@@ -137,7 +143,9 @@ async fn main() -> Result<(), String> {
     //    come, and accepting an uninvited Welcome would hold keys for a room nobody agreed
     //    to join. The room's own protection is separate and lives at the owner.
     check_invitation(&invitation, &room_did, &member.did)?;
-    println!("invitation verified — issued by this room, to this key, in window, signed by the room");
+    println!(
+        "invitation verified — issued by this room, to this key, in window, signed by the room"
+    );
 
     // 5. Present it, with a key package minted for this member's room DID.
     let (identity, key_package) = vti_rooms::mls::IdentitySnapshot::mint(&member.did)
@@ -149,6 +157,7 @@ async fn main() -> Result<(), String> {
             transport_did,
             key_package: Some(B64.encode(&key_package)),
             invitation: Some(invitation),
+            since_epoch: None,
         })
         .await?;
     let reply = client
@@ -175,7 +184,10 @@ async fn main() -> Result<(), String> {
     // Reading `room_epoch()` is what makes this number comparable to the owner's.
     let room = vti_rooms::sealed::SealedRoom::new(room_did.clone(), group);
 
-    println!("\njoined `{}` at epoch {}", admitted.room_id, admitted.epoch);
+    println!(
+        "\njoined `{}` at epoch {}",
+        admitted.room_id, admitted.epoch
+    );
     println!("this member is at room epoch {}", room.room_epoch());
     println!(
         "granted     {}",
@@ -564,8 +576,7 @@ impl Client {
             };
             let _ = self.transport.ack(frame.ack.clone()).await;
 
-            let Ok(envelope) =
-                serde_json::from_slice::<serde_json::Value>(&frame.message.payload)
+            let Ok(envelope) = serde_json::from_slice::<serde_json::Value>(&frame.message.payload)
             else {
                 continue;
             };
@@ -598,7 +609,10 @@ impl Client {
                 .unwrap_or(serde_json::Value::Null);
 
             if typ.contains("problem-report") {
-                let code = body.get("code").and_then(|c| c.as_str()).unwrap_or("(no code)");
+                let code = body
+                    .get("code")
+                    .and_then(|c| c.as_str())
+                    .unwrap_or("(no code)");
                 let comment = body
                     .get("comment")
                     .and_then(|c| c.as_str())
