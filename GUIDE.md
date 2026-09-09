@@ -183,6 +183,51 @@ a room does not advertise it.
 
 ---
 
+## 5. Fronting a real room — a standalone host, or a VTC
+
+Nothing above is specific to this sample. The site is a client, and both kinds of host serve
+the same surface.
+
+**A standalone `room-host`** is what §1 and §4 already run. Point `?at=` at its URL or its DID
+and the site cannot tell the difference from the sample's.
+
+**A VTC data room** works the same way, and needs nothing from this repository. A VTC serves
+the whole `rooms/*` family — `records/{put,get,list,curate}`, `epoch/chain`, `create`,
+`owner/{claim,transfer}` — through the same dispatch spine and the same delivery layer, over
+REST, DIDComm **and** TSP. `room-host` is the reference implementation extracted from that
+code, which is why a client written against one works against the other.
+
+So:
+
+```
+#/room/<roomDid>?at=https://vtc.example        # over HTTPS — the VTC needs your origin allowed
+#/room/<roomDid>?at=did:webvh:…:vtc            # over its mediator — nothing to allow
+```
+
+Two things had to be true for that second line, and both are now:
+
+- **The site resolves `did:webvh`.** It used to resolve `did:peer` only, so it could dial the
+  rooms this sample mints and nothing else — and a production room is a `did:webvh`, as is a
+  VTC.
+- **A `did:webvh` room's invitation can be verified in the browser.** The gate in wasm derives
+  a key from a `did:key` or a `did:peer` identifier and has no way to resolve a log; the page
+  resolves it and passes the key in
+  ([VTI #1382](https://github.com/OpenVTC/verifiable-trust-infrastructure/pull/1382)).
+
+### What still has to come from somewhere else
+
+**Admission.** Working *in* a room needs only the host. Being *let into* one needs the room's
+owner to decide, and a VTA has no surface for a stranger to ask — `rooms/owner/*` are
+instructions an owner gives their own agent, not requests a stranger makes. `sample-room`
+implements that missing surface, which is the honest description of what it is for.
+
+So a VTC room can be fronted today by a member who **already holds** its membership and
+authority credentials — the site will open it, read it, write to it and walk its epoch chain.
+Getting those credentials in the first place still goes through an owner that speaks the
+admission protocol, and no VTA does yet.
+
+---
+
 ## When something does not work
 
 **"advertises no mediator, so there is nowhere to ask to join"** — the room is a `did:key`.
