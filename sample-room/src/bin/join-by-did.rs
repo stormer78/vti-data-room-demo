@@ -1,9 +1,15 @@
 //! Join a room knowing **nothing but its DID**.
 //!
 //! ```text
-//! cargo run --bin join-by-did -- did:peer:2.Vz6Mk…          # over DIDComm
-//! cargo run --bin join-by-did -- --tsp did:peer:2.Vz6Mk…    # over TSP
+//! cargo run --bin join-by-did -- did:peer:2.Vz6Mk…                    # join
+//! cargo run --bin join-by-did -- --tsp did:peer:2.Vz6Mk…              # force TSP
+//! cargo run --bin join-by-did -- <roomDid> --at did:peer:2.Vz6Mk…     # and write a record
 //! ```
+//!
+//! `--at` is the **host**, and it has to be said because a room's identifier deliberately
+//! does not name one: a room may be served by several, and a room that named its host could
+//! never move. With it, this joins and then seals, writes, lists and re-opens a record — the
+//! whole member surface, none of it over HTTP.
 //!
 //! Both carriers reach the same owner on the same socket — a mediator permits one websocket
 //! per DID and multiplexes the two onto it. `--tsp` exists so the owner's TSP arm can be
@@ -47,6 +53,9 @@ use affinidi_tdk::messaging::profiles::ATMProfile;
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD as B64;
 use dataroom_sample_room as wire;
+
+/// The DIDComm `type` a Trust-Task envelope rides under, per the framework binding.
+const TRUST_TASK_ENVELOPE: &str = "https://trusttasks.org/binding/didcomm/0.1/envelope";
 use futures_lite::StreamExt as _;
 
 /// How long to wait for the owner to answer before giving up.
@@ -60,11 +69,21 @@ const REPLY_TIMEOUT: Duration = Duration::from_secs(30);
 async fn main() -> Result<(), String> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let over_tsp = args.iter().any(|a| a == "--tsp");
+    let host = args
+        .iter()
+        .position(|a| a == "--at")
+        .and_then(|i| args.get(i + 1))
+        .cloned();
     let room_did = args
         .iter()
-        .find(|a| !a.starts_with("--"))
-        .cloned()
-        .ok_or("usage: join-by-did [--tsp] <room did:peer>")?;
+        .enumerate()
+        // Skip flags and the value that follows `--at`.
+        .filter(|(i, a)| {
+            !a.starts_with("--") && args.get(i.wrapping_sub(1)).map(String::as_str) != Some("--at")
+        })
+        .map(|(_, a)| a.clone())
+        .next()
+        .ok_or("usage: join-by-did [--tsp] <room did:peer> [--at <host did>]")?;
 
     // 1. Where is this room's owner, and over what? The room's own identifier says both.
     let advertised = wire::advertised_mediator(&room_did)?.ok_or_else(|| {
@@ -182,7 +201,7 @@ async fn main() -> Result<(), String> {
     // `RoomGroup` mints no rungs, so a member who kept one could read only from where they
     // joined — and it counts in MLS epochs, which start at 0 where a room's start at 1.
     // Reading `room_epoch()` is what makes this number comparable to the owner's.
-    let room = vti_rooms::sealed::SealedRoom::new(room_did.clone(), group);
+    let mut room = vti_rooms::sealed::SealedRoom::new(room_did.clone(), group);
 
     println!(
         "\njoined `{}` at epoch {}",
@@ -201,6 +220,115 @@ async fn main() -> Result<(), String> {
                 .collect::<Vec<_>>()
                 .join(", "))
             .unwrap_or_else(|| "—".into())
+    );
+
+    // 7. And, if we were told where the records live, use them.
+    let Some(host) = host else {
+        println!(
+            "\n(no --at, so nothing was read or written — a room's identifier does not name \
+             its host, so somebody has to say which one)"
+        );
+        return Ok(());
+    };
+    records(&client, &host, &room_did, &member, &mut room, &admitted).await
+}
+
+/// Seal a record, write it, list the room, and open what comes back.
+///
+/// The whole member surface, over the same link the join went through and not a URL in it.
+/// What proves the host is doing its job is the **opening**: the record is sealed in this
+/// process under a key the host has never held, so a host that changed a byte — or relocated
+/// the record to another key, version or epoch — produces something that does not open rather
+/// than something wrong.
+async fn records(
+    client: &Client,
+    host: &str,
+    room_did: &str,
+    member: &MemberKey,
+    room: &mut vti_rooms::sealed::SealedRoom,
+    admitted: &wire::Admitted,
+) -> Result<(), String> {
+    let key = format!("cli/{}", uuid::Uuid::new_v4());
+    println!("\nhost      {host}");
+
+    // Versions are monotonic **per room**, not per record, and the version is bound into the
+    // ciphertext — so it is asked for rather than assumed. Sealing against a guess stores
+    // fine and never opens, which reads as corruption.
+    let listed = client
+        .host_task(
+            host,
+            "https://trusttasks.org/spec/rooms/records/list/0.1",
+            room_did,
+            member,
+            admitted,
+            "read",
+            serde_json::json!({}),
+        )
+        .await?;
+    let existing = listed["records"].as_array().cloned().unwrap_or_default();
+    let next_version = existing
+        .iter()
+        .filter_map(|r| r["version"].as_u64())
+        .max()
+        .unwrap_or(0)
+        + 1;
+    println!("records   {} already stored", existing.len());
+
+    let plaintext = b"Written by join-by-did, over a mediator.";
+    let sealed = room
+        .seal_record(&key, next_version, plaintext)
+        .map_err(|e| format!("seal the record: {e}"))?;
+
+    client
+        .host_task(
+            host,
+            "https://trusttasks.org/spec/rooms/records/put/0.1",
+            room_did,
+            member,
+            admitted,
+            // `write`, not `read`: the presentation is narrowed to exactly this action, and a
+            // member holding only `read` is refused by their own `attenuate` first.
+            "write",
+            serde_json::json!({
+                "key": key,
+                "sealed": sealed,
+                // Create-only. This is about the *key*, where the number sealed above is
+                // about the room — two questions both spelled as a version.
+                "expectedVersion": 0,
+            }),
+        )
+        .await?;
+    println!("wrote     {key} at version {next_version}");
+
+    let got = client
+        .host_task(
+            host,
+            "https://trusttasks.org/spec/rooms/records/get/0.1",
+            room_did,
+            member,
+            admitted,
+            "read",
+            serde_json::json!({ "key": key }),
+        )
+        .await?;
+    // A stored record comes back **flat** — `sealed` is the ciphertext, with `nonce` and
+    // `epoch` beside it — while `put` takes the same three as one `SealedContent`. Opening
+    // needs all three together, and the epoch is the one that decides which key is used, so
+    // they are reassembled here. The browser member does exactly this, and for the same
+    // reason; the asymmetry is the host's wire form, not either client's choice.
+    let stored: vti_rooms::wire::SealedContent = serde_json::from_value(serde_json::json!({
+        "ciphertext": got["sealed"],
+        "nonce": got["nonce"],
+        "epoch": got["epoch"],
+    }))
+    .map_err(|e| format!("the host's record: {e}"))?;
+    let opened = room
+        .open_record(&key, next_version, &stored)
+        .map_err(|e| format!("open the record: {e}"))?;
+
+    println!(
+        "read back {}",
+        String::from_utf8(opened).map_err(|e| e.to_string())?
     );
     Ok(())
 }
@@ -243,22 +371,92 @@ impl MemberKey {
         Ok(Self { did, secret })
     }
 
+    /// Mint an authority presentation for one action on this room.
+    ///
+    /// Derived from the room's own grant by `attenuate`, which refuses to widen — so asking
+    /// for an action this member does not hold fails **here**, in their own hands, rather
+    /// than as a refusal from the host. "You were never given this" and "the host disagreed"
+    /// are different sentences, and only the first can be answered by asking the owner.
+    ///
+    /// No `audience`: dtg-credentials 0.8 removed the field and requires the presenter to be
+    /// the leaf's subject instead. The leaf grants to this member and a verifier accepts it
+    /// from nobody else, so the binding is the library's rule rather than a value to fill in
+    /// — which is what it had to become, because filled with a *host's* DID it named a party
+    /// no presenter could match and every request was refused.
+    async fn present(
+        &self,
+        authority: &serde_json::Value,
+        membership: &serde_json::Value,
+        action: &str,
+    ) -> Result<serde_json::Value, String> {
+        use dtg_credentials::DTGCredential;
+
+        let root: DTGCredential = serde_json::from_value(authority.clone())
+            .map_err(|e| format!("authority credential: {e}"))?;
+        let now = chrono::Utc::now();
+        let mut leaf = root
+            .attenuate(
+                self.did.clone(),
+                vec![action.to_string()],
+                now,
+                // Required, and rightly: a presentation that does not expire is a standing
+                // grant, which is the one thing a presentation exists not to be.
+                now + chrono::Duration::hours(4),
+            )
+            .map_err(|e| format!("cannot narrow your authority to `{action}`: {e}"))?;
+        leaf.sign(&self.secret, None)
+            .await
+            .map_err(|e| format!("sign the attenuated credential: {e}"))?;
+
+        // **Strings, not objects.** `AuthorityPresentation` types `membership` as a `String`
+        // and `authority` as `Vec<String>`; handed objects a host refuses the whole request
+        // as "invalid type: map, expected a string", which reads as a malformed payload
+        // rather than as a shape mismatch. Leaf first, then the credential the room issued,
+        // so every link the host relies on is present — it will not fetch one.
+        Ok(serde_json::json!({
+            "membership": serde_json::to_string(membership).map_err(|e| e.to_string())?,
+            "authority": [
+                serde_json::to_string(leaf.credential()).map_err(|e| e.to_string())?,
+                serde_json::to_string(authority).map_err(|e| e.to_string())?,
+            ],
+        }))
+    }
+
     /// Attach this key's `eddsa-jcs-2022` proof to a request.
     ///
     /// What proves the *room* identity authored it, as distinct from what DIDComm proves
     /// about the transport identity that carried it.
     async fn sign(&self, request: &wire::AdmissionRequest) -> Result<serde_json::Value, String> {
-        let mut doc =
+        let doc =
             serde_json::to_value(request).map_err(|e| format!("serialise the request: {e}"))?;
+        self.sign_document(&doc).await
+    }
+
+    /// Attach the proof to any JSON document.
+    ///
+    /// One signer for both conversations, because they are the same act: an admission
+    /// request and a Trust Task are both documents this key authors, and a counterparty
+    /// takes the author from the proof either way. A second signer would be a second place
+    /// for the proof to be built slightly differently.
+    async fn sign_document(
+        &self,
+        document: &serde_json::Value,
+    ) -> Result<serde_json::Value, String> {
+        let mut doc = document.clone();
+        // A proof never covers itself.
+        doc.as_object_mut()
+            .ok_or("a signable document must be a JSON object")?
+            .remove("proof");
+
         let proof = affinidi_data_integrity::DataIntegrityProof::sign(
             &doc,
             &self.secret,
             affinidi_data_integrity::SignOptions::new(),
         )
         .await
-        .map_err(|e| format!("sign the request: {e}"))?;
+        .map_err(|e| format!("sign the document: {e}"))?;
         doc.as_object_mut()
-            .ok_or("a request must be a JSON object")?
+            .ok_or("a signable document must be a JSON object")?
             .insert(
                 "proof".into(),
                 serde_json::to_value(&proof).map_err(|e| e.to_string())?,
@@ -462,6 +660,94 @@ impl Client {
         })
     }
 
+    /// Send one signed Trust Task to a **host** and return its response payload.
+    ///
+    /// The other party this member talks to, and a different kind of conversation from
+    /// admission: a room's owner is asked to *decide* something, a host is asked to *act*.
+    /// So this is a Trust Task, which already has a binding for each carrier — DIDComm wraps
+    /// the document under one reserved envelope type, TSP sends it with no wrapper at all,
+    /// byte-identical to what a POST would carry.
+    ///
+    /// Nothing about who is asking comes from the carrier. The host takes the presenter from
+    /// the document's own proof and the authority from the chain inside it, so this is one
+    /// signature that could have gone either way.
+    async fn host_task(
+        &self,
+        host: &str,
+        type_uri: &str,
+        room_did: &str,
+        member: &MemberKey,
+        admitted: &wire::Admitted,
+        action: &str,
+        payload: serde_json::Value,
+    ) -> Result<serde_json::Value, String> {
+        let presentation = member
+            .present(&admitted.authority, &admitted.membership, action)
+            .await?;
+
+        let mut body = serde_json::json!({
+            "roomId": room_did,
+            "presentation": presentation,
+        });
+        for (k, v) in payload.as_object().into_iter().flatten() {
+            body[k] = v.clone();
+        }
+
+        let document = serde_json::json!({
+            "id": format!("urn:uuid:{}", uuid::Uuid::new_v4()),
+            "type": type_uri,
+            "issuedAt": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+            "payload": body,
+        });
+        let signed = member.sign_document(&document).await?;
+
+        let id = signed["id"].as_str().unwrap_or_default().to_string();
+        let answer = if self.over_tsp {
+            self.send_tsp_document(host, &id, &signed).await?;
+            self.await_reply(host, &id).await?.1
+        } else {
+            self.send_didcomm(host, &id, TRUST_TASK_ENVELOPE, signed)
+                .await?;
+            self.await_reply(host, &id).await?.1
+        };
+
+        // The answer is the document and it says for itself whether it is one — no status
+        // came with it and none is missed.
+        if answer["type"]
+            .as_str()
+            .is_some_and(|t| t.contains("trust-task-error"))
+        {
+            let p = &answer["payload"];
+            return Err(format!(
+                "the host refused: {}",
+                p["reason"]
+                    .as_str()
+                    .or(p["code"].as_str())
+                    .unwrap_or("(no reason)")
+            ));
+        }
+        Ok(answer["payload"].clone())
+    }
+
+    /// A Trust-Task document over TSP: the payload **is** the document, no wrapper.
+    async fn send_tsp_document(
+        &self,
+        to: &str,
+        _id: &str,
+        document: &serde_json::Value,
+    ) -> Result<(), String> {
+        let bytes = serde_json::to_vec(document).map_err(|e| e.to_string())?;
+        self.atm
+            .tsp()
+            .send_routed(
+                &self.profile,
+                &[self.mediator_did.clone(), to.to_string()],
+                &bytes,
+            )
+            .await
+            .map_err(|e| format!("send the TSP request: {e}"))
+    }
+
     /// Send one message to the room and wait for the reply threaded to it.
     ///
     /// Threaded rather than "the next message that arrives": a mediator delivers status
@@ -598,6 +884,21 @@ impl Client {
                 continue;
             }
 
+            // Two shapes, because two kinds of correspondent answer here. A room's owner
+            // replies in the demo's own protocol — `{ type, body }`. A host replies with a
+            // Trust-Task document, which over TSP is wrapped only enough to correlate it:
+            // `{ thid, document }`. Taking the document when there is one is what tells them
+            // apart, and neither needs to know about the other.
+            if let Some(document) = envelope.get("document") {
+                return Ok((
+                    document
+                        .get("type")
+                        .and_then(|t| t.as_str())
+                        .unwrap_or_default()
+                        .to_string(),
+                    document.clone(),
+                ));
+            }
             let typ = envelope
                 .get("type")
                 .and_then(|t| t.as_str())

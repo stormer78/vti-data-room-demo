@@ -40,12 +40,21 @@ and a member who resolved the room's DID reaches the party that can admit them k
 nothing else. `sample-room/src/bin/join-by-did.rs` is that member, in one argument:
 
 ```
-cargo run --bin join-by-did -- did:peer:2.Vz6Mk…
+cargo run --bin join-by-did -- did:peer:2.Vz6Mk… --at did:peer:2.Vz6Mk…
 ```
 
-No host URL, no catalogue, no port. It resolves the room (pure computation — no network),
+No URL anywhere, no catalogue, no port. It resolves the room (pure computation — no network),
 reads the mediator out of it, mints its two identities, asks, verifies the VIC it gets back,
-presents it with a KeyPackage, and joins the group.
+presents it with a KeyPackage, joins the group — and then, given `--at`, seals a record,
+writes it, lists the room and opens what comes back. The whole member surface.
+
+`--at` names the **host**, and it has to be said because a room's identifier deliberately does
+not name one: a room may be served by several, and a room that named its host could never
+move.
+
+It exists so the owner's and the host's carrier arms can be exercised without a browser, and
+because two independent members of one protocol is how a shape that only one of them believes
+in gets caught.
 
 **The browser does the same.** Paste a room's DID into the site, or follow a
 `#/room/<roomDid>` link to a room it holds no keys for, and it runs that ceremony — the same
