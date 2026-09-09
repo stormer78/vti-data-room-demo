@@ -82,6 +82,16 @@
   <section id="rooms-panel" class="hide">
     <h2>2 · Rooms</h2>
     <div id="rooms" class="grid"></div>
+    <div style="margin-top:1.25rem;border-top:1px solid var(--line);padding-top:1rem">
+      <p class="sub" style="margin:0 0 .6rem">Or join one this site has never heard of.
+        Paste a room's DID: if it is a <code>did:peer:2</code> it carries the mediator its
+        owner listens on, and everything else follows from that one lookup — no host URL, no
+        catalogue, no configuration.</p>
+      <div class="row">
+        <input id="by-did" placeholder="did:peer:2.Vz6Mk…" style="flex:1">
+        <button id="join-by-did">Ask to join</button>
+      </div>
+    </div>
   </section>
 
   <section id="join-panel" class="hide">
@@ -154,6 +164,10 @@
 
 <script type="module">
 import init, { mintKeyPackage, verifyInvitation, Identity, RoomMember } from "./vendor/vti_rooms.js";
+import {
+  ADMITTED, INVITATION, OwnerConnection, REQUEST_ADMISSION, REQUEST_INVITATION,
+  advertisedMediator, mintTransportIdentity, signedRequest,
+} from "./admission.js";
 
 // The module is ~1.9 MB and every handler below depends on it, so the buttons stay
 // disabled until it is ready. Without this the page looks finished before it is, and a
@@ -215,6 +229,9 @@ async function mint() {
   me = { did: identity.did };
   renderIdentity();
   await loadRooms();
+  // Pick the link back up. Somebody who arrived by one has already said which room they
+  // want; making them ask again would be forgetting it.
+  await openAddressedRoom();
 }
 
 function renderIdentity() {
@@ -240,20 +257,28 @@ function renderIdentity() {
 /// room shipped beside it. Everything the room panel does from here is host-only: list,
 /// get, put, curate, and the epoch chain.
 ///
-/// What it cannot do is get you *in*. Admission needs the room's owner, and reaching an
-/// owner you were not handed means resolving the room's DID to a mediator and speaking
-/// DIDComm — which a `did:key` room cannot advertise. Said plainly rather than offered and
-/// then failing.
+/// And when this browser holds no keys for it, it asks. Admission needs the room's owner,
+/// and reaching one this site was never told about means resolving the room's DID to a
+/// mediator and speaking DIDComm — which is what [`joinByDid`] does. A `did:key` room still
+/// cannot be reached this way, because it has no service block to say where anyone listens;
+/// that is said plainly rather than offered and then failing.
 async function openAddressedRoom() {
   const addressed = roomFromUrl();
-  if (!addressed || !me) return false;
+  if (!addressed) return false;
+  // Handed a link before there is anybody to be handed it. Say so and remember it: a room
+  // is joined by *somebody*, and silence here reads as a link that did not work.
+  if (!me) {
+    log("you were given a room, but this browser has no key yet — mint one and it will "
+      + "carry on from here");
+    return false;
+  }
 
   const held = S.get(key("room:" + addressed.roomDid));
   if (!held) {
-    log(`this browser holds no keys for ${addressed.roomDid} — you would need an `
-      + `invitation from its owner, and reaching an owner this site was not told about `
-      + `needs the room to advertise a mediator, which a did:key room cannot`);
-    return false;
+    // Not a dead end any more. If the room says where its owner listens, ask — which is
+    // the whole of being handed a link to a room this site has never seen.
+    await joinByDid(addressed.roomDid);
+    return true;
   }
   // The host from the link wins: a room may move, and the address you were given is more
   // current than the one you stored when you joined.
@@ -369,6 +394,119 @@ async function join(roomId, roomDid) {
   await loadRecords();
   await loadRooms();
   log("");
+}
+
+/// Join a room over **DIDComm**, knowing nothing but its DID.
+///
+/// The same six steps `join` takes, over a carrier that does not need this site to have
+/// been told anything. The differences are worth naming, because they are the point:
+///
+/// - the room is found by **resolving its identifier**, not by looking it up in a
+///   catalogue. A `did:peer:2` carries the mediator its owner listens on, and resolving one
+///   is arithmetic — no network, no registry.
+/// - the request is signed by the **room identity in wasm** and sent from a **transport
+///   identity in this file**, and it names the second so the owner can check they agree.
+///   Two proofs about two different things: who authored this, and who is on the other end
+///   of this connection.
+/// - the owner answers over the same connection, so nothing here needs a URL.
+///
+/// What stays identical is everything that matters: the same six invitation clauses run in
+/// the same wasm before a KeyPackage is minted, and the room's credentials name the same
+/// `did:key` they would have either way.
+async function joinByDid(roomDid) {
+  roomDid = roomDid.trim();
+  if (!roomDid) return;
+  if (!me) { log("mint an identity first — a room is joined by somebody"); return; }
+  if (S.get(key("room:" + roomDid))) { await openRoom(roomDid); return; }
+
+  const mine = [];
+  let connection = null;
+  try {
+    const mediator = advertisedMediator(roomDid);
+    if (!mediator) {
+      log(`${roomDid} advertises no mediator, so there is nowhere to ask to join. A `
+        + `did:key room can be verified but not reached — only a method with a service `
+        + `block can say where its owner listens.`);
+      return;
+    }
+    mine.push(`resolved the room — it listens at ${mediator}`);
+
+    // Disposable, and minted per join. It is a routing address; nothing is issued to it.
+    log("opening a connection to the room's mediator…");
+    const transport = mintTransportIdentity();
+    mine.push(`transport identity minted — ${transport.identity.did.slice(0, 32)}…`);
+
+    connection = await OwnerConnection.open(roomDid, transport);
+    mine.push("connected — this browser is now reachable at that mediator");
+
+    // 1 · Ask. Signed by the room key in wasm, naming the transport identity, so the owner
+    //     can bind what was signed to the connection it arrived on.
+    log("asking the room's owner for an invitation…");
+    const ask = signedRequest(identity, roomDid, transport.identity.did);
+    const reply = await connection.ask(REQUEST_INVITATION, ask);
+    if (reply.type !== INVITATION) throw new Error(`expected an invitation, got ${reply.type}`);
+    const invitation = reply.body.invitation;
+    const vic = JSON.stringify(invitation);
+    mine.push("invitation received over DIDComm — from the room, not from this site");
+
+    // 2 · Check it before acting on it. The same six clauses, in the same wasm.
+    const credentialId = verifyInvitation(vic, roomDid, me.did, spent());
+    mine.push("invitation verified — issued by this room, to me, signed by its own key, unspent");
+
+    // 3 · Mint a KeyPackage, gated on that invitation.
+    const minted = mintKeyPackage(me.did, roomDid, vic, spent());
+    const { keyPackage } = JSON.parse(minted);
+    mine.push("key package minted — one per room, never reused");
+
+    // 4 · Present both.
+    log("presenting the invitation and a key package…");
+    const present = signedRequest(identity, roomDid, transport.identity.did, {
+      keyPackage, invitation,
+    });
+    const admittedReply = await connection.ask(REQUEST_ADMISSION, present);
+    if (admittedReply.type !== ADMITTED) {
+      throw new Error(`expected admission, got ${admittedReply.type}`);
+    }
+    const out = admittedReply.body;
+
+    // 5 · Accept the Welcome.
+    member = RoomMember.join(roomDid, minted, b64u.dec(out.welcome), vic, spent());
+    markSpent(credentialId);
+    currentRoomDid = roomDid;
+    mine.push("welcome accepted in this tab — the group key never left the owner unsealed");
+    mine.push("invitation spent — it will not work a second time");
+
+    // No slug: this room was addressed, not listed, and the sample's own routing is the
+    // only thing a slug was ever for. The host is asked for, because admission says
+    // nothing about where records live — a room's owner and its host are two parties.
+    S.set(key("room:" + roomDid), {
+      snapshot: member.snapshot(), roomDid, host: roomFromUrl()?.host ?? SAMPLE_HOST,
+      membership: out.membership, authority: out.authority,
+    });
+
+    const rungs = await fetchChain().catch(() => 0);
+    if (rungs) {
+      mine.push(`epoch key chain fetched — ${rungs} rung(s), so the room's history opens`);
+      S.set(key("room:" + roomDid), {
+        ...S.get(key("room:" + roomDid)), snapshot: member.snapshot(),
+      });
+    }
+
+    $("steps").innerHTML =
+        `<li class="who">the owner, over DIDComm</li>` + out.steps.map(s => `<li>${s}</li>`).join("")
+      + `<li class="who">this browser</li>` + mine.map(s => `<li>${s}</li>`).join("");
+    $("join-panel").classList.remove("hide");
+    showEpochs();
+    await loadRecords();
+    await loadRooms();
+    log("");
+  } catch (e) {
+    log("could not join over DIDComm: " + (e.message ?? e));
+  } finally {
+    // The connection is per-admission. Records go to the host over HTTP and need nothing
+    // from the owner, so holding a socket open past the join would hold it for nothing.
+    connection?.close();
+  }
 }
 
 async function openRoom(roomDid) {
@@ -687,6 +825,8 @@ $("forget").onclick = () => {
   renderIdentity();
 };
 $("write").onclick = write;
+$("join-by-did").onclick = () => joinByDid($("by-did").value);
+$("by-did").onkeydown = (e) => { if (e.key === "Enter") joinByDid($("by-did").value); };
 
 renderIdentity();
 if (me) await loadRooms();

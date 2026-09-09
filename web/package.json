@@ -1,0 +1,20 @@
+{
+  "name": "dataroom-demo-web",
+  "private": true,
+  "type": "module",
+  "description": "Build-time only. The site itself is static files; this exists so `web/vendor/didcomm.js` can be built from the same DIDComm the wallet extension speaks rather than hand-written here.",
+  "scripts": {
+    "build": "esbuild src/transport.js --bundle --format=esm --platform=browser --outfile=vendor/didcomm.js"
+  },
+  "dependencies": {
+    "@noble/curves": "^2.0.1",
+    "@openvtc/pnm-core": "^0.9.1",
+    "@openvtc/vti-didcomm-js": "^0.7.0"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.2"
+  },
+  "allowScripts": {
+    "esbuild@0.28.2": true
+  }
+}

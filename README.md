@@ -45,9 +45,13 @@ cargo run --bin join-by-did -- did:peer:2.Vz6Mk…
 
 No host URL, no catalogue, no port. It resolves the room (pure computation — no network),
 reads the mediator out of it, mints its two identities, asks, verifies the VIC it gets back,
-presents it with a KeyPackage, and joins the group. What is *not* done yet is the same leg in
-the browser: the site still admits through the sample's HTTP catalogue, so the JavaScript
-member is the one party that cannot yet join a room it was not told about.
+presents it with a KeyPackage, and joins the group.
+
+**The browser does the same.** Paste a room's DID into the site, or follow a
+`#/room/<roomDid>` link to a room it holds no keys for, and it runs that ceremony over
+DIDComm — the same `@openvtc/pnm-core` stack the wallet extension speaks, bundled into
+`web/vendor/didcomm.js`. So the site now admits you to rooms it was never told about, which
+is the claim it could not previously make.
 
 ### A member holds two identities, and they are not interchangeable
 
@@ -131,6 +135,7 @@ that quietly behaved like `attributed` would misrepresent it.
 | | |
 |---|---|
 | `web/vendor/vti_rooms*` | built from `vti-rooms-wasm` — see below |
+| `web/vendor/didcomm.js` | `@openvtc/pnm-core` + `@openvtc/vti-didcomm-js`, bundled |
 | `sample-room/` | `vti-rooms` with the `mls` feature, native |
 
 Rebuild the wasm after changing `vti-rooms-wasm`:
@@ -140,3 +145,14 @@ cargo build -p vti-rooms-wasm --profile wasm-release --target wasm32-unknown-unk
 wasm-bindgen --target web --out-dir <this>/web/vendor --out-name vti_rooms \
   target/wasm32-unknown-unknown/wasm-release/vti_rooms_wasm.wasm
 ```
+
+Rebuild the DIDComm bundle after changing `web/src/transport.js`, which is only the list of
+what the demo uses:
+
+```
+cd web && npm install && npm run build -- --minify
+```
+
+The site itself stays static files — `npm` is build-time only, and nothing it produces is
+written by hand here. A demo that re-implemented DIDComm would be demonstrating the
+re-implementation.
