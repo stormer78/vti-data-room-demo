@@ -136,6 +136,18 @@
       Task, and it authorises each one against a chain narrowed to that single action —
       <code>read</code> to list, <code>write</code> to store. It stores ciphertext and has
       no code path that could read it.</p>
+    <p><strong>And none of it needs a URL.</strong> A room says which mediator its owner
+      listens on, and this page reaches both that owner and the room's host through it — over
+      TSP where they offer it, DIDComm where they do not. So the site works against a room and
+      a host it has never seen, neither of which has to be somewhere your browser is allowed
+      to call. What that buys is reach, not authority: the host still takes who you are from
+      the signature on each request and what you may do from the chain the room issued, so
+      the same bytes would be exactly as authorised had they gone over HTTP.</p>
+    <p>You hold <strong>two keys</strong>, and they do different jobs. The one above is your
+      room identity: it lives in wasm, signs everything, and is what the room's credentials
+      name. The other is a throwaway address the mediator delivers to, minted fresh each
+      session. Every request carries a proof of each, and names the second inside the first —
+      so a signed request cannot be picked up and replayed by somebody else's connection.</p>
     <p><strong>Try this first.</strong> Join a room as <code>alice</code>, write something,
       then switch to <code>bob</code> and join too. Bob reads what Alice wrote before he
       arrived — not because the host handed him anything readable, but because he walked
