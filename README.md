@@ -129,41 +129,68 @@ and bound to the connection that carried it.
 
 ## Running it
 
+Two modes. The first is the smaller thing to stand up; the second is the one the design is
+about.
+
+### Everything local, over HTTP
+
 ```
-# the host — the real binary, from the VTI workspace
-room-host --data-dir /tmp/room-host-data --listen 127.0.0.1:8300 \
-          --allow-origin http://127.0.0.1:8787
+# the host — the real binary, built from the VTI workspace
+cargo run -p room-host -- \
+  --data-dir /tmp/room-host-data \
+  --listen 127.0.0.1:8300 \
+  --allow-origin http://127.0.0.1:8787
 
 # the owner, and the site
 cd sample-room && DEMO_WEB_DIR=../web cargo run
 # → http://127.0.0.1:8787
 ```
 
-Or with every leg over a mediator and no browser-reachable URL anywhere:
+Rooms are `did:key` here, so they advertise nothing and can only be joined through this
+sample's own catalogue. That is honest rather than broken: a room pointing at somewhere
+nobody listens fails at the join, while a room pointing nowhere says so before you try.
+
+### Over a mediator, with no browser-reachable URL anywhere
+
+Both halves need `--features didcomm`, which is a **cargo** flag and off by default — a host
+that is not asked to be reachable opens no socket and mints no identity.
 
 ```
-room-host --features didcomm … --mediator-did did:webvh:…:mediator   # prints its host DID
-#   note: no --allow-origin, so the page cannot reach it over HTTP at all
-
-MEDIATOR_DID=did:webvh:…:mediator ROOM_HOST_DID=did:peer:2.Vz6Mk… \
-  DEMO_WEB_DIR=../web cargo run
+# the host. Note: no --allow-origin, so the page cannot reach it over HTTP at all.
+cargo run -p room-host --features didcomm -- \
+  --data-dir /tmp/room-host-data \
+  --listen 127.0.0.1:8300 \
+  --mediator-did did:webvh:…:mediator
+# → host DID: did:peer:2.Vz6Mk…          ← copy this
 ```
 
-The owner keeps using the host's URL while telling members its DID, and that is not an
-inconsistency — it is the shape. The owner is a server and can open a URL; a browser often
-cannot. One host serves both at once and the client picks.
+```
+# the owner and the site. MEDIATOR_DID makes each room a did:peer:2 that advertises where
+# its owner listens; ROOM_HOST_DID is what members are told about the host.
+cd sample-room
+MEDIATOR_DID=did:webvh:…:mediator \
+ROOM_HOST_DID=did:peer:2.Vz6Mk… \
+DEMO_WEB_DIR=../web cargo run
+# → listening for did:peer:2.Vz6Mk… at did:webvh:…   (DIDComm + TSP)
+```
 
-Add `MEDIATOR_DID=…` to make the rooms `did:peer:2`, advertise it, and have the owner listen
-there. Without it they are `did:key` and advertise nothing, which is honest rather than
-broken — a room pointing at somewhere nobody listens fails at the join, while a room pointing
-nowhere says so before you try.
+Now the site admits you to rooms it was never told about — paste a room DID, or follow a
+`#/room/<roomDid>?at=<hostDid>` link — and every record operation goes over the mediator. To
+prove that last part, check that the browser genuinely cannot reach the host: with no
+`--allow-origin`, a `fetch` to `127.0.0.1:8300` from the page fails, and writing a record
+still works.
+
+The same ceremony without a browser, which is also the reference implementation:
 
 ```
-MEDIATOR_DID=did:webvh:…:mediator DEMO_WEB_DIR=../web cargo run
-# → listening for did:peer:2.Vz6Mk… at did:webvh:…
-
-cargo run --bin join-by-did -- did:peer:2.Vz6Mk…      # in another terminal
+cd sample-room
+cargo run --bin join-by-did -- <roomDid> --at <hostDid>
+#   --tsp forces TSP even where a room does not advertise it
 ```
+
+The owner reaches the host by URL while telling members its DID, and that is the shape rather
+than an inconsistency: the owner is a server and can open a URL, a browser frequently cannot,
+and one host serves both carriers at once with the client choosing.
 
 ## What is real, and what is not
 

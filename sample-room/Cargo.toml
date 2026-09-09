@@ -1,6 +1,10 @@
 [package]
 name = "dataroom-sample-room"
 version = "0.1.0"
+# `cargo run` means the owner. Without this it became ambiguous the moment `join-by-did`
+# was added — and the failure lands on whoever is following the README, which is exactly
+# the person least equipped to guess which binary was meant.
+default-run = "dataroom-sample-room"
 # 2024, for `let ... && ...` chains — the shape the checks in `admission` are written in,
 # where a condition and the value it needs read as one clause rather than as a nest.
 edition = "2024"
