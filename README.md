@@ -4,9 +4,11 @@ A single site where somebody with no wallet, no agent and no account can mint th
 `did:key` in the browser, be admitted to a data room, and read and write records the host
 stores but cannot read.
 
-Design note: `verifiable-trust-infrastructure`,
-`docs/05-design-notes/data-rooms-demo-site.md` — §10 is what building this changed, including
-the two predictions that did not survive it.
+Design note:
+[`docs/05-design-notes/data-rooms-demo-site.md`](https://github.com/OpenVTC/verifiable-trust-infrastructure/blob/main/docs/05-design-notes/data-rooms-demo-site.md)
+in [OpenVTC/verifiable-trust-infrastructure](https://github.com/OpenVTC/verifiable-trust-infrastructure),
+which is also where `room-host` and `vti-rooms` live. §10 is what building this changed,
+including the two predictions that did not survive it.
 
 ## Two things, and the boundary between them is the point
 
@@ -135,7 +137,8 @@ about.
 ### Everything local, over HTTP
 
 ```
-# the host — the real binary, built from the VTI workspace
+# the host — the real binary, built from a checkout of
+#   github.com/OpenVTC/verifiable-trust-infrastructure
 cargo run -p room-host -- \
   --data-dir /tmp/room-host-data \
   --listen 127.0.0.1:8300 \
