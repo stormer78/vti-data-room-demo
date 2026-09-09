@@ -76,6 +76,22 @@ struct Room {
     /// and neither substitutes for the other: the member's copy stops *their* key holder
     /// being filled twice, this one stops a replayed invitation adding a second leaf.
     spent_invitations: Vec<String>,
+    /// Every commit this room has made, in order, from epoch 2 onwards.
+    ///
+    /// **The piece the published ceremony does not have.** Every membership change is a
+    /// commit and every commit advances the epoch; a member who misses one is stuck at
+    /// their last epoch and can open nothing sealed after it. The symptom is "this record
+    /// does not open", which reads like corruption rather than like a message that never
+    /// arrived.
+    ///
+    /// In the real design a commit reaches a member's agent over DIDComm, pushed. A browser
+    /// has no inbox, so it has to **pull** — the same inversion the invitation forced — and
+    /// something has to keep the commits for it to pull. That is this.
+    ///
+    /// Public, and safe to be: a commit is MLS handshake material that authenticates its
+    /// committer *inside the group*. It confers nothing on a non-member, and a member who
+    /// is entitled to the room is entitled to its history of membership changes.
+    commits: Vec<CommittedEpoch>,
     /// The owner's MLS group. Every admission commits, which advances the epoch — which is
     /// why members must apply commits or lose the ability to open anything newer.
     group: RoomGroup,
@@ -86,6 +102,16 @@ struct Room {
     /// incremental-sync watermark needs, and per-record counters are not comparable to
     /// each other.
     next_version: u64,
+}
+
+/// One commit and the epoch it produced.
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CommittedEpoch {
+    /// The epoch the group is at *after* applying this. A member at `epoch - 1` needs it.
+    epoch: u32,
+    /// The commit, base64url.
+    commit: String,
 }
 
 #[derive(Clone, Serialize)]
@@ -287,6 +313,14 @@ async fn join(
         "adding a member produced no Welcome".to_string(),
     ))?;
 
+    // Kept so members already in the room can catch up. A member added at epoch 3 needs
+    // every commit from 4 onwards; one added at 5 needs none of them, because their Welcome
+    // carried the group as it stood.
+    room.commits.push(CommittedEpoch {
+        epoch: (change.epoch + 1) as u32,
+        commit: B64.encode(&change.commit),
+    });
+
     // Consumed only now, after the join succeeded. Spending it earlier would burn an
     // invitation on a failed attempt and leave the member unable to retry.
     room.spent_invitations.push(credential_id);
@@ -389,6 +423,38 @@ async fn put_record(
     room.next_version += 1;
     room.records.insert(key, record.clone());
     Ok(Json(record))
+}
+
+/// Commits a member has not applied yet.
+///
+/// `since` is the member's own epoch — what they are at, not what they want. Everything
+/// after it is what they missed, which is a question only they can ask because only they
+/// know where they are.
+///
+/// A member who never calls this stays readable at their own epoch and finds every newer
+/// record refusing to open. That failure is silent and reads as corruption, which is why
+/// the site catches up on open rather than waiting to be asked.
+async fn commits(
+    State(demo): State<Rooms>,
+    Path(room_id): Path<String>,
+    axum::extract::Query(q): axum::extract::Query<CommitsQuery>,
+) -> Result<Json<Vec<CommittedEpoch>>, (StatusCode, String)> {
+    let rooms = demo.rooms.lock().await;
+    let room = rooms
+        .get(&room_id)
+        .ok_or((StatusCode::NOT_FOUND, format!("no room `{room_id}`")))?;
+    Ok(Json(
+        room.commits
+            .iter()
+            .filter(|c| c.epoch > q.since)
+            .cloned()
+            .collect(),
+    ))
+}
+
+#[derive(Deserialize)]
+struct CommitsQuery {
+    since: u32,
 }
 
 /// The version a write should seal itself for.
@@ -557,6 +623,7 @@ async fn main() {
                 owner_membership,
                 owner_authority,
                 spent_invitations: Vec::new(),
+                commits: Vec::new(),
                 group,
                 records: BTreeMap::new(),
                 next_version: 1,
@@ -575,6 +642,7 @@ async fn main() {
         .route("/api/rooms/{room_id}/invite", post(invite))
         .route("/api/rooms/{room_id}/join", post(join))
         .route("/api/rooms/{room_id}/next-version", get(next_version))
+        .route("/api/rooms/{room_id}/commits", get(commits))
         .route(
             "/api/rooms/{room_id}/records",
             get(list_records),

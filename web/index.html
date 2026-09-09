@@ -63,7 +63,15 @@
     <div class="row">
       <button id="mint" disabled>Loading…</button>
       <button id="forget" class="ghost hide">Forget it</button>
+      <span style="flex:1"></span>
+      <span style="color:var(--muted);font-size:13px">acting as</span>
+      <button id="who-alice" class="ghost">alice</button>
+      <button id="who-bob" class="ghost">bob</button>
     </div>
+    <p class="sub" style="margin:.6rem 0 0">Two identities in this browser, both real —
+      separate keys, separate MLS leaves, separate snapshots. Switching is not a filter on
+      a view; it is being somebody else. Join a room as each, and watch what the first has
+      to do to keep reading once the second arrives.</p>
     <p class="warn" style="margin-top:1rem">
       This key lives in this browser and nowhere else. Clearing site data destroys it, and
       with it every room you joined — nobody can re-issue it for you. That is the point,
@@ -114,7 +122,13 @@
       Task, and it authorises each one against a chain narrowed to that single action —
       <code>read</code> to list, <code>write</code> to store. It stores ciphertext and has
       no code path that could read it.</p>
-    <p><strong>Try this.</strong> Retract a record in each room. The Workshop grants
+    <p><strong>Try this first.</strong> Join a room as <code>alice</code>, write something,
+      then switch to <code>bob</code> and join too. Bob cannot read what Alice wrote — his
+      key chain reaches back only to the epoch he joined at, which is what
+      <code>FromJoin</code> means and why the two numbers above are not one number. Switch
+      back to Alice: she applies the commit Bob's arrival made, and still reads her own
+      record, because she was there when it was written.</p>
+    <p><strong>Then this.</strong> Retract a record in each room. The Workshop grants
       <code>curate</code> and the Library does not, so the same button works in one and is
       refused in the other — refused <em>in this tab</em>, before any request is made,
       because <code>attenuate</code> will not widen what the room gave you. "You were never
@@ -169,34 +183,48 @@ let member = null;                 // a live RoomMember
 let currentRoom = null;
 let currentRoomDid = null;
 
-{
-  const saved = S.get("dr:identity");
-  if (saved) { identity = Identity.restore(saved); me = { did: identity.did }; }
+// Several identities in one browser, because a room with one member demonstrates
+// nothing about a room. Each is a real `did:key` with its own MLS leaf and its own
+// snapshots — switching is not a view filter, it is being somebody else.
+const WHO = ["alice", "bob"];
+let who = S.get("dr:who") ?? WHO[0];
+const key = (suffix) => `dr:${who}:${suffix}`;
+
+function load() {
+  const saved = S.get(key("identity"));
+  identity = saved ? Identity.restore(saved) : null;
+  me = identity ? { did: identity.did } : null;
+  member = null; currentRoom = null; currentRoomDid = null;
 }
+load();
 
 /// Invitations this browser has already spent. The member's own half of single-use.
-const spent = () => JSON.stringify(S.get("dr:spent") ?? []);
-const markSpent = (id) => S.set("dr:spent", [...(S.get("dr:spent") ?? []), id]);
+const spent = () => JSON.stringify(S.get(key("spent")) ?? []);
+const markSpent = (id) => S.set(key("spent"), [...(S.get(key("spent")) ?? []), id]);
 
 // The key is minted and held in wasm; this page never sees the private half. The
 // snapshot is key material all the same — it is what restores the identity — so it
 // lives in per-origin storage and goes nowhere else.
 async function mint() {
   identity = Identity.mint();
-  S.set("dr:identity", identity.snapshot());
+  S.set(key("identity"), identity.snapshot());
   me = { did: identity.did };
   renderIdentity();
   await loadRooms();
 }
 
 function renderIdentity() {
+  for (const name of WHO) {
+    const b = $("who-" + name);
+    b.className = name === who ? "" : "ghost";
+  }
   if (!me) {
-    $("did-line").textContent = "No identity in this browser yet.";
+    $("did-line").textContent = `No identity for ${who} in this browser yet.`;
     $("mint").classList.remove("hide"); $("forget").classList.add("hide");
     $("rooms-panel").classList.add("hide");
     return;
   }
-  $("did-line").innerHTML = `You are <code>${me.did}</code>`;
+  $("did-line").innerHTML = `You are <strong>${who}</strong> — <code>${me.did}</code>`;
   $("mint").classList.add("hide"); $("forget").classList.remove("hide");
   $("rooms-panel").classList.remove("hide");
 }
@@ -215,7 +243,7 @@ async function loadRooms() {
   const rooms = await (await fetch("/api/rooms")).json();
   $("rooms").innerHTML = "";
   for (const r of rooms) {
-    const held = S.get("dr:room:" + r.roomId);
+    const held = S.get(key("room:" + r.roomId));
     const el = document.createElement("div");
     el.className = "card";
     el.innerHTML = `<strong>${r.label}</strong>
@@ -281,7 +309,7 @@ async function join(roomId, roomDid) {
 
   currentRoom = roomId;
   currentRoomDid = roomDid;
-  S.set("dr:room:" + roomId, {
+  S.set(key("room:" + roomId), {
     snapshot: member.snapshot(), roomDid,
     membership: out.membership, authority: out.authority,
   });
@@ -296,15 +324,44 @@ async function join(roomId, roomDid) {
   log("");
 }
 
-function openRoom(roomId) {
-  const held = S.get("dr:room:" + roomId);
+async function openRoom(roomId) {
+  const held = S.get(key("room:" + roomId));
   member = RoomMember.restore(held.snapshot);
   currentRoom = roomId;
   currentRoomDid = held.roomDid;
-  $("steps").innerHTML = "<li>restored from this browser — no key left it</li>";
+
+  const applied = await catchUp(roomId, held);
+  $("steps").innerHTML = "<li>restored from this browser — no key left it</li>"
+    + (applied
+        ? `<li>applied ${applied} commit(s) — somebody joined while you were away</li>`
+        : "");
   $("join-panel").classList.remove("hide");
   showEpochs();
-  loadRecords();
+  await loadRecords();
+}
+
+/// Apply every commit made since this member last looked.
+///
+/// **Not optional, and done before anything is read.** Every membership change is a commit
+/// and every commit advances the epoch; a member who misses one is stuck at their last
+/// epoch and can open nothing sealed after it. The symptom is "this record does not open" —
+/// which reads as corruption rather than as a message that never arrived, and is why this
+/// runs on open rather than waiting for somebody to press something.
+///
+/// A pull, because a tab has no inbox. In the real design the commit is pushed to a
+/// member's agent over DIDComm; the same inversion the invitation forced applies here.
+async function catchUp(roomId, held) {
+  const missed = await (await fetch(
+    `/api/rooms/${roomId}/commits?since=${member.epoch}`)).json();
+  if (!missed.length) return 0;
+
+  for (const c of missed) {
+    // Each returns the epoch rung it produced. Applied in order — a commit is only
+    // meaningful against the epoch immediately before it.
+    member.applyCommit(b64u.dec(c.commit));
+  }
+  S.set(key("room:" + roomId), { ...held, snapshot: member.snapshot() });
+  return missed.length;
 }
 
 function showEpochs() {
@@ -331,7 +388,7 @@ const HOST = localStorage.getItem("dr:host") ?? "http://127.0.0.1:8300";
 
 /// Send one Trust Task to the host, signed, carrying a presentation for `action`.
 async function hostTask(type, action, payload) {
-  const held = S.get("dr:room:" + currentRoom);
+  const held = S.get(key("room:" + currentRoom));
 
   // Minting the presentation can fail, and when it does the request is never made.
   // `attenuate` refuses to widen, so asking for an action the room did not grant fails
@@ -499,11 +556,26 @@ async function write() {
   await loadRecords();
 }
 
+for (const name of WHO) {
+  const b = $("who-" + name);
+  b.onclick = async () => {
+    who = name;
+    S.set("dr:who", who);
+    load();
+    renderIdentity();
+    // Panels belong to the identity that opened them.
+    $("join-panel").classList.add("hide");
+    $("records-panel").classList.add("hide");
+    log("");
+    if (me) await loadRooms();
+  };
+}
+
 $("mint").onclick = mint;
 $("forget").onclick = () => {
-  if (!confirm("This destroys the key and every room it joined. There is no recovery.")) return;
-  for (const k of Object.keys(localStorage)) if (k.startsWith("dr:")) S.del(k);
-  me = null; member = null;
+  if (!confirm(`This destroys ${who}'s key and every room it joined. There is no recovery.`)) return;
+  for (const k of Object.keys(localStorage)) if (k.startsWith(`dr:${who}:`)) S.del(k);
+  me = null; member = null; identity = null;
   $("join-panel").classList.add("hide"); $("records-panel").classList.add("hide");
   renderIdentity();
 };
