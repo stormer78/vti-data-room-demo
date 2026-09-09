@@ -28,6 +28,8 @@
 //! and authorises nothing, which is why it says so on screen. The record path is real; the
 //! authority path is the next slice.
 
+mod owner;
+
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -41,6 +43,8 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 use vti_rooms::mls::RoomGroup;
 
+use crate::owner::RoomIdentity;
+
 /// One demo room: its group, and the ciphertext its members have stored.
 struct Room {
     /// The room's identifier. A real room mints a `did:webvh` before it tells any host;
@@ -49,6 +53,15 @@ struct Room {
     id: String,
     /// A human name for the catalogue.
     label: String,
+    /// The room's own signing identity. A room issues the credentials that govern it, so
+    /// it needs a key of its own — see [`crate::owner`].
+    identity: RoomIdentity,
+    /// Invitations already spent, by credential id.
+    ///
+    /// The owner's half of single-use. The member enforces it too, in their own browser,
+    /// and neither substitutes for the other: the member's copy stops *their* key holder
+    /// being filled twice, this one stops a replayed invitation adding a second leaf.
+    spent_invitations: Vec<String>,
     /// The owner's MLS group. Every admission commits, which advances the epoch — which is
     /// why members must apply commits or lose the ability to open anything newer.
     group: RoomGroup,
@@ -79,6 +92,9 @@ type Rooms = Arc<Mutex<BTreeMap<String, Room>>>;
 #[serde(rename_all = "camelCase")]
 struct CatalogueEntry {
     room_id: String,
+    /// The room's DID — what a member verifies its credentials against, recovered
+    /// lexically because it is a `did:key`.
+    room_did: String,
     label: String,
     epoch: u32,
     members: usize,
@@ -91,6 +107,7 @@ async fn catalogue(State(rooms): State<Rooms>) -> Json<Vec<CatalogueEntry>> {
             .values()
             .map(|r| CatalogueEntry {
                 room_id: r.id.clone(),
+                room_did: r.identity.did.clone(),
                 label: r.label.clone(),
                 epoch: (r.group.epoch() + 1) as u32,
                 members: r.group.member_count(),
@@ -101,11 +118,50 @@ async fn catalogue(State(rooms): State<Rooms>) -> Json<Vec<CatalogueEntry>> {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct InviteRequest {
+    /// The DID to admit. Told to the owner out of band — which is the point: admission is
+    /// a decision somebody makes about somebody, not a form a stranger fills in.
+    did: String,
+}
+
+/// Issue an invitation.
+///
+/// A demo room admits anyone who asks, and says so on screen. What is *not* faked is the
+/// artefact: this is a real DTG credential, signed by the room, naming one subject, valid
+/// for an hour, single-use. A real owner decides whether to call this; the ceremony either
+/// side of it is identical.
+async fn invite(
+    State(rooms): State<Rooms>,
+    Path(room_id): Path<String>,
+    Json(req): Json<InviteRequest>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let rooms = rooms.lock().await;
+    let room = rooms
+        .get(&room_id)
+        .ok_or((StatusCode::NOT_FOUND, format!("no room `{room_id}`")))?;
+
+    let invitation = room
+        .identity
+        .invite(&req.did)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+
+    Ok(Json(serde_json::json!({
+        "invitation": serde_json::from_str::<serde_json::Value>(&invitation)
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?,
+        "roomDid": room.identity.did,
+    })))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct JoinRequest {
     /// The visitor's own `did:key`, minted in their browser.
     did: String,
     /// Their KeyPackage, base64url — the public half of an identity they keep privately.
     key_package: String,
+    /// The invitation this room issued them.
+    invitation: serde_json::Value,
 }
 
 #[derive(Serialize)]
@@ -116,6 +172,10 @@ struct JoinResponse {
     welcome: String,
     /// The room's epoch after the commit this admission produced.
     epoch: u32,
+    /// The room's attestation that this DID belongs to it.
+    membership: serde_json::Value,
+    /// What this member may do — the chain root they attenuate from, per request.
+    authority: serde_json::Value,
     /// Each step the owner took, so the site can show the ceremony rather than a spinner.
     steps: Vec<String>,
 }
@@ -130,6 +190,57 @@ async fn join(
     let room = rooms
         .get_mut(&room_id)
         .ok_or((StatusCode::NOT_FOUND, format!("no room `{room_id}`")))?;
+
+    // The owner's half of the two-party check. The member checked this invitation too,
+    // in their own browser, and neither substitutes for the other: theirs stops their key
+    // holder being filled with a room they never agreed to join; this one stops a replayed
+    // or forged invitation adding a leaf to the group.
+    let invitation: dtg_credentials::DTGCredential =
+        serde_json::from_value(req.invitation.clone())
+            .map_err(|e| (StatusCode::BAD_REQUEST, format!("invitation: {e}")))?;
+    let credential_id = invitation
+        .id()
+        .ok_or((
+            StatusCode::BAD_REQUEST,
+            "the invitation carries no id, so single use cannot be enforced".to_string(),
+        ))?
+        .to_string();
+
+    if invitation.issuer() != room.identity.did {
+        return Err((
+            StatusCode::FORBIDDEN,
+            format!(
+                "that invitation was issued by `{}`, not by this room",
+                invitation.issuer()
+            ),
+        ));
+    }
+    if invitation.subject() != req.did {
+        return Err((
+            StatusCode::FORBIDDEN,
+            format!(
+                "that invitation names `{}`, not you — an invitation is not transferable",
+                invitation.subject()
+            ),
+        ));
+    }
+    // Against the room's own key, recovered from its own identifier. Nothing to resolve.
+    let (_, room_key) = multibase::decode(&room.identity.did["did:key:".len()..])
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("room did: {e}")))?;
+    invitation
+        .verify_proof_with_public_key(&room_key[2..])
+        .map_err(|_| {
+            (
+                StatusCode::FORBIDDEN,
+                "that invitation's proof does not verify against this room's key".to_string(),
+            )
+        })?;
+    if room.spent_invitations.contains(&credential_id) {
+        return Err((
+            StatusCode::CONFLICT,
+            format!("invitation `{credential_id}` has already been used"),
+        ));
+    }
 
     let key_package = B64
         .decode(req.key_package.as_bytes())
@@ -148,16 +259,40 @@ async fn join(
         "adding a member produced no Welcome".to_string(),
     ))?;
 
+    // Consumed only now, after the join succeeded. Spending it earlier would burn an
+    // invitation on a failed attempt and leave the member unable to retry.
+    room.spent_invitations.push(credential_id);
+
+    // Membership and authority are separate acts because they are separate facts: being a
+    // member is not being allowed to write. A demo visitor gets `read` and `write` and not
+    // `curate` or `admin`, so the room has a governance surface rather than one bit.
+    let membership = room
+        .identity
+        .issue_membership(&req.did)
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    let authority = room
+        .identity
+        .issue_authority(&req.did, &["read", "write"])
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+
     let epoch = (change.epoch + 1) as u32;
     Ok(Json(JoinResponse {
         room_id,
         welcome: B64.encode(welcome),
         epoch,
+        membership: serde_json::from_str(&membership)
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?,
+        authority: serde_json::from_str(&authority)
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?,
         steps: vec![
-            format!("invitation issued to {}", req.did),
+            "invitation verified — issued by this room, to you, unspent".into(),
             "key package validated against the room's ciphersuite".into(),
             format!("member added — the group committed to epoch {epoch}"),
             "welcome sealed to that key package alone".into(),
+            "membership credential issued".into(),
+            "authority credential issued — read, write".into(),
         ],
     }))
 }
@@ -236,12 +371,18 @@ async fn main() {
         ("demo-library", "The Library — a shared reading room"),
         ("demo-workshop", "The Workshop — notes an agent can recall"),
     ] {
-        let group = RoomGroup::create("did:key:zDemoOwner").expect("create the demo room group");
+        // Identity first, then the group. A room is a DTG node before it is a set of keys,
+        // and the order is forced: a host told about a room it named could never let it
+        // leave.
+        let identity = RoomIdentity::mint().expect("mint the room's identity");
+        let group = RoomGroup::create(&identity.did).expect("create the demo room group");
         rooms.insert(
             id.to_string(),
             Room {
                 id: id.to_string(),
                 label: label.to_string(),
+                identity,
+                spent_invitations: Vec::new(),
                 group,
                 records: BTreeMap::new(),
                 next_version: 1,
@@ -253,6 +394,7 @@ async fn main() {
     let web = std::env::var("DEMO_WEB_DIR").unwrap_or_else(|_| "../web".to_string());
     let app = Router::new()
         .route("/api/rooms", get(catalogue))
+        .route("/api/rooms/{room_id}/invite", post(invite))
         .route("/api/rooms/{room_id}/join", post(join))
         .route("/api/rooms/{room_id}/next-version", get(next_version))
         .route(

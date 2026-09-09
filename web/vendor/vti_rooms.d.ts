@@ -2,6 +2,41 @@
 /* eslint-disable */
 
 /**
+ * A member's signing identity — the JS boundary over [`identity::MemberIdentity`].
+ *
+ * Every secret this member has now lives on this side: the Ed25519 key that names their
+ * `did:key` and signs, and the MLS keys inside [`RoomMember`]. JavaScript holds two opaque
+ * snapshots and no key.
+ */
+export class Identity {
+    private constructor();
+    free(): void;
+    [Symbol.dispose](): void;
+    /**
+     * Mint a fresh `did:key`.
+     */
+    static mint(): Identity;
+    /**
+     * See [`identity::MemberIdentity::present`].
+     */
+    present(vac: string, vmc: string, action: string, nonce?: string | null): string;
+    /**
+     * Restore one from [`Identity::snapshot`].
+     */
+    static restore(snapshot: string): Identity;
+    /**
+     * See [`identity::MemberIdentity::sign_document`].
+     */
+    signDocument(document: string): string;
+    /**
+     * **Key material.** Per-origin, per-device storage and nowhere else — anyone holding
+     * this is this member.
+     */
+    snapshot(): string;
+    readonly did: string;
+}
+
+/**
  * One room this browser can open.
  *
  * Holds the MLS group and the epoch key chain. Every method that resolves a key takes
@@ -71,7 +106,14 @@ export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembl
 
 export interface InitOutput {
     readonly memory: WebAssembly.Memory;
+    readonly __wbg_identity_free: (a: number, b: number) => void;
     readonly __wbg_roommember_free: (a: number, b: number) => void;
+    readonly identity_did: (a: number, b: number) => void;
+    readonly identity_mint: (a: number) => void;
+    readonly identity_present: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number) => void;
+    readonly identity_restore: (a: number, b: number, c: number) => void;
+    readonly identity_signDocument: (a: number, b: number, c: number, d: number) => void;
+    readonly identity_snapshot: (a: number, b: number) => void;
     readonly mintKeyPackage: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => void;
     readonly roommember_addLinks: (a: number, b: number, c: number, d: number) => void;
     readonly roommember_applyCommit: (a: number, b: number, c: number, d: number) => void;
@@ -86,9 +128,9 @@ export interface InitOutput {
     readonly verifyInvitation: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => void;
     readonly __wbindgen_export: (a: number) => void;
     readonly __wbindgen_add_to_stack_pointer: (a: number) => number;
-    readonly __wbindgen_export2: (a: number, b: number) => number;
-    readonly __wbindgen_export3: (a: number, b: number, c: number, d: number) => number;
-    readonly __wbindgen_export4: (a: number, b: number, c: number) => void;
+    readonly __wbindgen_export2: (a: number, b: number, c: number) => void;
+    readonly __wbindgen_export3: (a: number, b: number) => number;
+    readonly __wbindgen_export4: (a: number, b: number, c: number, d: number) => number;
 }
 
 export type SyncInitInput = BufferSource | WebAssembly.Module;

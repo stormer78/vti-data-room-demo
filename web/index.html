@@ -38,6 +38,10 @@
   .steps { list-style:none; padding:0; margin:.75rem 0 0; }
   .steps li { padding:.3rem 0 .3rem 1.4rem; position:relative; color:var(--muted); }
   .steps li::before { content:"✓"; position:absolute; left:0; color:var(--ok); }
+  .steps li.who { padding-left:0; margin-top:.6rem; font-size:.75rem; font-weight:600;
+                  text-transform:uppercase; letter-spacing:.05em; color:var(--ink); }
+  .steps li.who::before { content:""; }
+  .steps li.who:first-child { margin-top:0; }
   .epochs { display:flex; gap:1.5rem; margin-top:.5rem; }
   .epochs div { font-size:1.6rem; font-weight:600; line-height:1; }
   .epochs span { display:block; font-size:.75rem; color:var(--muted);
@@ -57,7 +61,7 @@
     <h2>1 · Who you are</h2>
     <p id="did-line" class="muted">No identity in this browser yet.</p>
     <div class="row">
-      <button id="mint">Mint a did:key</button>
+      <button id="mint" disabled>Loading…</button>
       <button id="forget" class="ghost hide">Forget it</button>
     </div>
     <p class="warn" style="margin-top:1rem">
@@ -74,9 +78,11 @@
 
   <section id="join-panel" class="hide">
     <h2>3 · How you got in</h2>
-    <p class="sub" style="margin:0">Admission is five acts by the room's owner. They are
-      shown rather than hidden behind a spinner, because the governance <em>is</em> the
-      product.</p>
+    <p class="sub" style="margin:0">Admission is a two-party act, and both halves are
+      shown. The owner decides and issues; this browser checks before it acts on anything.
+      Neither side's checks substitute for the other's — the owner's stop a forged
+      invitation adding a member, and yours stop your own key holder being filled with a
+      room you never agreed to join.</p>
     <ul id="steps" class="steps"></ul>
     <div class="epochs">
       <div id="epoch">–<span>your epoch</span></div>
@@ -110,34 +116,20 @@
 </main>
 
 <script type="module">
-import init, { mintKeyPackage, RoomMember } from "./vendor/vti_rooms.js";
+import init, { mintKeyPackage, verifyInvitation, Identity, RoomMember } from "./vendor/vti_rooms.js";
 
+// The module is ~1.9 MB and every handler below depends on it, so the buttons stay
+// disabled until it is ready. Without this the page looks finished before it is, and a
+// click in that window does nothing at all — which reads as broken rather than as slow.
 await init();
+document.getElementById("mint").disabled = false;
+document.getElementById("mint").textContent = "Mint a did:key";
 
 const $ = (id) => document.getElementById(id);
 const log = (m) => { $("log").textContent = m; };
 
-// ── did:key ────────────────────────────────────────────────────────────────
-// Ed25519 public key, multicodec-prefixed (0xed 0x01) and base58btc'd with a
-// `z`. Lexical and self-certifying: nothing has to resolve it, which is why a
-// tab can mint one and be somebody immediately.
-const B58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
-function base58(bytes) {
-  let digits = [0];
-  for (const b of bytes) {
-    let carry = b;
-    for (let i = 0; i < digits.length; i++) {
-      carry += digits[i] << 8;
-      digits[i] = carry % 58;
-      carry = (carry / 58) | 0;
-    }
-    while (carry) { digits.push(carry % 58); carry = (carry / 58) | 0; }
-  }
-  let out = "";
-  for (const b of bytes) { if (b === 0) out += "1"; else break; }
-  for (let i = digits.length - 1; i >= 0; i--) out += B58[digits[i]];
-  return out;
-}
+// `did:key` derivation lives in wasm now, beside the key it derives from — so does
+// signing, so the private half never reaches this file.
 const b64u = {
   enc: (b) => btoa(String.fromCharCode(...b)).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,""),
   dec: (s) => Uint8Array.from(atob(s.replace(/-/g,"+").replace(/_/g,"/")), c => c.charCodeAt(0)),
@@ -153,20 +145,28 @@ const S = {
   del: (k) => { try { localStorage.removeItem(k); } catch {} },
 };
 
-let me = S.get("dr:identity");     // { did, privateKeyJwk }
+let identity = null;               // the wasm-held signing identity
+let me = null;                     // { did } — the public half, for display
 let member = null;                 // a live RoomMember
 let currentRoom = null;
+let currentRoomDid = null;
 
+{
+  const saved = S.get("dr:identity");
+  if (saved) { identity = Identity.restore(saved); me = { did: identity.did }; }
+}
+
+/// Invitations this browser has already spent. The member's own half of single-use.
+const spent = () => JSON.stringify(S.get("dr:spent") ?? []);
+const markSpent = (id) => S.set("dr:spent", [...(S.get("dr:spent") ?? []), id]);
+
+// The key is minted and held in wasm; this page never sees the private half. The
+// snapshot is key material all the same — it is what restores the identity — so it
+// lives in per-origin storage and goes nowhere else.
 async function mint() {
-  const kp = await crypto.subtle.generateKey({ name: "Ed25519" }, true, ["sign", "verify"]);
-  const raw = new Uint8Array(await crypto.subtle.exportKey("raw", kp.publicKey));
-  const mc = new Uint8Array(raw.length + 2);
-  mc.set([0xed, 0x01]); mc.set(raw, 2);
-  me = {
-    did: "did:key:z" + base58(mc),
-    privateKeyJwk: await crypto.subtle.exportKey("jwk", kp.privateKey),
-  };
-  S.set("dr:identity", me);
+  identity = Identity.mint();
+  S.set("dr:identity", identity.snapshot());
+  me = { did: identity.did };
   renderIdentity();
   await loadRooms();
 }
@@ -184,6 +184,15 @@ function renderIdentity() {
 }
 
 // ── rooms ──────────────────────────────────────────────────────────────────
+//
+// A room has two names here and they are not interchangeable. Its **DID** is its
+// identifier: what its credentials are issued by, what a record's ciphertext is bound
+// to, what `vti-rooms` means by `roomId`. The **slug** is a path segment this sample
+// room happens to route on, and nothing in the trust model knows about it.
+//
+// Conflating them is not cosmetic — it was caught here by the invitation check, which
+// refused a perfectly good invitation on the grounds that `demo-library` had not issued
+// it. That refusal was correct.
 async function loadRooms() {
   const rooms = await (await fetch("/api/rooms")).json();
   $("rooms").innerHTML = "";
@@ -197,34 +206,70 @@ async function loadRooms() {
     const b = document.createElement("button");
     b.className = held ? "ghost" : "";
     b.textContent = held ? "Open" : "Ask to join";
-    b.onclick = () => held ? openRoom(r.roomId) : join(r.roomId);
+    b.onclick = () => held ? openRoom(r.roomId) : join(r.roomId, r.roomDid);
     el.append(b);
     $("rooms").append(el);
   }
 }
 
-async function join(roomId) {
-  log("minting a key package for this room…");
-  // One per room, never reused: a KeyPackage is a stable public identifier, so
-  // offering the same one to two rooms tells anyone who sees both that one party
-  // is in both.
-  const minted = mintKeyPackage(me.did);
-  const { keyPackage } = JSON.parse(minted);
+async function join(roomId, roomDid) {
+  const mine = [];   // what THIS browser checked, as against what the owner reports
 
+  // 1 · Tell the owner who you are, and get back an invitation naming you.
+  //     Out of band in reality — a DID pasted into a message. The owner deciding is
+  //     the whole of admission; that this demo always says yes is stated, not hidden.
+  log("asking the owner for an invitation…");
+  const inviteRes = await fetch(`/api/rooms/${roomId}/invite`, {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ did: me.did }),
+  });
+  if (!inviteRes.ok) { log("refused: " + await inviteRes.text()); return; }
+  const { invitation } = await inviteRes.json();
+  const vic = JSON.stringify(invitation);
+
+  // 2 · Check it before acting on it. Six clauses, in wasm: it is an invitation, this
+  //     room issued it, it names me, the signing key belongs to that issuer, the proof
+  //     verifies, and I have not spent it. The fourth is the one that was missing
+  //     upstream — without it anyone can forge an invitation to any room.
+  let credentialId;
+  try {
+    credentialId = verifyInvitation(vic, roomDid, me.did, spent());
+    mine.push("invitation verified — issued by this room, to me, signed by its own key, unspent");
+  } catch (e) {
+    log("this invitation does not check out: " + (e.message ?? e));
+    return;
+  }
+
+  // 3 · Mint a KeyPackage — gated on that same invitation, because minting retains a
+  //     private key against a Welcome that may never come.
+  const minted = mintKeyPackage(me.did, roomDid, vic, spent());
+  const { keyPackage } = JSON.parse(minted);
+  mine.push("key package minted — one per room, never reused");
+
+  // 4 · Present the invitation and the KeyPackage together.
   const res = await fetch(`/api/rooms/${roomId}/join`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ did: me.did, keyPackage }),
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ did: me.did, keyPackage, invitation }),
   });
   if (!res.ok) { log("refused: " + await res.text()); return; }
   const out = await res.json();
 
-  member = RoomMember.join(roomId, minted, b64u.dec(out.welcome));
-  currentRoom = roomId;
-  S.set("dr:room:" + roomId, member.snapshot());
+  // 5 · Accept the Welcome — the invitation is checked again here, then spent.
+  member = RoomMember.join(roomDid, minted, b64u.dec(out.welcome), vic, spent());
+  markSpent(credentialId);
+  mine.push("welcome accepted in this tab — the group key never left the owner unsealed");
+  mine.push("invitation spent — it will not work a second time");
 
-  $("steps").innerHTML = out.steps.map(s => `<li>${s}</li>`).join("")
-    + `<li>welcome accepted in this tab — the group key never left the owner unsealed</li>`;
+  currentRoom = roomId;
+  currentRoomDid = roomDid;
+  S.set("dr:room:" + roomId, {
+    snapshot: member.snapshot(), roomDid,
+    membership: out.membership, authority: out.authority,
+  });
+
+  $("steps").innerHTML =
+      `<li class="who">the owner</li>` + out.steps.map(s => `<li>${s}</li>`).join("")
+    + `<li class="who">this browser</li>` + mine.map(s => `<li>${s}</li>`).join("");
   $("join-panel").classList.remove("hide");
   showEpochs();
   await loadRecords();
@@ -233,8 +278,10 @@ async function join(roomId) {
 }
 
 function openRoom(roomId) {
-  member = RoomMember.restore(S.get("dr:room:" + roomId));
+  const held = S.get("dr:room:" + roomId);
+  member = RoomMember.restore(held.snapshot);
   currentRoom = roomId;
+  currentRoomDid = held.roomDid;
   $("steps").innerHTML = "<li>restored from this browser — no key left it</li>";
   $("join-panel").classList.remove("hide");
   showEpochs();
