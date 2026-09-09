@@ -6,16 +6,32 @@
 //! not know the difference, and the moment it needs to, the demo has stopped demonstrating
 //! anything.
 //!
-//! The one part it plays:
+//! The one part it plays is the room's **owner**: it admits people, and it keeps each room's
+//! commits so members can catch up.
 //!
-//! - the room's **owner**, who admits people. Admission has to invert for a browser: the
-//!   published ceremony has the owner call `rooms/keys/key-package` *on the member's VTA*
-//!   and push a Welcome to it, and a tab has no DIDComm address and no inbox. So the
-//!   browser mints its KeyPackage locally and **pulls** the Welcome from `POST /api/join`.
-//! It is **not** the host. It used to carry a fallback record API for when `room-host` was
-//! not running, and that is gone: records go to the real host and nowhere else, so there is
-//! no longer any path in this demo where something stands in for storage rather than being
-//! it.
+//! # Admission inverts, and the reason is narrower than it looks
+//!
+//! The published ceremony is push-shaped — the owner calls `rooms/keys/key-package` *on the
+//! member's VTA* and pushes a Welcome to it. So a browser member has to **pull** instead: it
+//! mints its KeyPackage locally and asks for the Welcome.
+//!
+//! The obvious reason for that is wrong, and it was the reason this design gave itself first.
+//! It is not that a tab cannot be addressed over DIDComm — it can, and does here, with a
+//! `did:peer:2` it mints per session. It is that a tab cannot be addressed **between**
+//! sessions: an owner pushing to a tab that has since closed has pushed to an address that
+//! will never exist again.
+//!
+//! Which is why the pull is a small thing rather than a large one. A member does not need a
+//! permanent agent; it needs a way to ask for what it missed while it was gone.
+//!
+//! # It is not the host
+//!
+//! It used to carry a fallback record API for when `room-host` was not running, and that is
+//! gone: records go to the real host and nowhere else, so there is no longer any path in this
+//! demo where something stands in for storage rather than being it.
+//!
+//! Over HTTP this serves the page and a catalogue. Admission, commit delivery and every
+//! record operation go over a mediator.
 //!
 //! Everything else the site does — holding the group, sealing, opening, walking the epoch
 //! chain — happens in the browser, in the same `vti-rooms` this binary links, compiled to
@@ -405,11 +421,11 @@ async fn main() {
     // a process that refused to start because a remote mediator was down would be worse. But
     // it is said out loud, because a room advertising a mediator its owner never reached
     // looks joinable and is not.
-    if let Some(mediator) = mediator_did.clone() {
-        if let Err(e) = mediator::listen(rooms.clone(), mediator).await {
-            eprintln!("warning: the owner is not listening on the mediator — {e}");
-            eprintln!("         rooms still advertise it, so joining by DID will time out.");
-        }
+    if let Some(mediator) = mediator_did.clone()
+        && let Err(e) = mediator::listen(rooms.clone(), mediator).await
+    {
+        eprintln!("warning: the owner is not listening on the mediator — {e}");
+        eprintln!("         rooms still advertise it, so joining by DID will time out.");
     }
 
     let web = std::env::var("DEMO_WEB_DIR").unwrap_or_else(|_| "../web".to_string());

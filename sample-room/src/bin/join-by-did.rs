@@ -230,7 +230,13 @@ async fn main() -> Result<(), String> {
         );
         return Ok(());
     };
-    records(&client, &host, &room_did, &member, &mut room, &admitted).await
+    let held = Membership {
+        host: &host,
+        room_did: &room_did,
+        member: &member,
+        admitted: &admitted,
+    };
+    records(&client, &held, &mut room).await
 }
 
 /// Seal a record, write it, list the room, and open what comes back.
@@ -242,25 +248,19 @@ async fn main() -> Result<(), String> {
 /// than something wrong.
 async fn records(
     client: &Client,
-    host: &str,
-    room_did: &str,
-    member: &MemberKey,
+    held: &Membership<'_>,
     room: &mut vti_rooms::sealed::SealedRoom,
-    admitted: &wire::Admitted,
 ) -> Result<(), String> {
     let key = format!("cli/{}", uuid::Uuid::new_v4());
-    println!("\nhost      {host}");
+    println!("\nhost      {}", held.host);
 
     // Versions are monotonic **per room**, not per record, and the version is bound into the
     // ciphertext — so it is asked for rather than assumed. Sealing against a guess stores
     // fine and never opens, which reads as corruption.
     let listed = client
         .host_task(
-            host,
+            held,
             "https://trusttasks.org/spec/rooms/records/list/0.1",
-            room_did,
-            member,
-            admitted,
             "read",
             serde_json::json!({}),
         )
@@ -281,11 +281,8 @@ async fn records(
 
     client
         .host_task(
-            host,
+            held,
             "https://trusttasks.org/spec/rooms/records/put/0.1",
-            room_did,
-            member,
-            admitted,
             // `write`, not `read`: the presentation is narrowed to exactly this action, and a
             // member holding only `read` is refused by their own `attenuate` first.
             "write",
@@ -302,11 +299,8 @@ async fn records(
 
     let got = client
         .host_task(
-            host,
+            held,
             "https://trusttasks.org/spec/rooms/records/get/0.1",
-            room_did,
-            member,
-            admitted,
             "read",
             serde_json::json!({ "key": key }),
         )
@@ -586,6 +580,19 @@ fn room_verification_key(verification_method: &str) -> Result<Vec<u8>, String> {
         .map_err(|e| format!("`{verification_method}` public key: {e}"))
 }
 
+/// What a member holds after being admitted, and needs for every request afterwards.
+///
+/// Grouped because these five travel together and never separately: the host to ask, the room
+/// to ask about, the key that signs, and the two credentials the room issued. Passing them
+/// one at a time made a seven-argument call in which two `&str` sat adjacent and either order
+/// compiled.
+struct Membership<'a> {
+    host: &'a str,
+    room_did: &'a str,
+    member: &'a MemberKey,
+    admitted: &'a wire::Admitted,
+}
+
 /// One connection to a mediator, under the transport identity, carrying either protocol.
 ///
 /// One socket for both, because that is all a mediator gives: it permits one websocket per
@@ -673,16 +680,14 @@ impl Client {
     /// signature that could have gone either way.
     async fn host_task(
         &self,
-        host: &str,
+        room: &Membership<'_>,
         type_uri: &str,
-        room_did: &str,
-        member: &MemberKey,
-        admitted: &wire::Admitted,
         action: &str,
         payload: serde_json::Value,
     ) -> Result<serde_json::Value, String> {
+        let (host, room_did, member) = (room.host, room.room_did, room.member);
         let presentation = member
-            .present(&admitted.authority, &admitted.membership, action)
+            .present(&room.admitted.authority, &room.admitted.membership, action)
             .await?;
 
         let mut body = serde_json::json!({

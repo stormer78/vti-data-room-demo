@@ -223,7 +223,7 @@ impl RoomIdentity {
         // An id is not decoration: it is what a member records as spent, and single-use
         // cannot be enforced without one. An invitation that cannot be spent is one that
         // can be spent forever.
-        .with_id(&format!("urn:uuid:{}", uuid::Uuid::new_v4()));
+        .with_id(format!("urn:uuid:{}", uuid::Uuid::new_v4()));
         self.sign(&mut vic).await?;
         serde_json::to_string(vic.credential()).map_err(|e| e.to_string())
     }
@@ -241,7 +241,7 @@ impl RoomIdentity {
             // claimed otherwise would be minting the one assertion nobody checked.
             false,
         )
-        .with_id(&format!("urn:uuid:{}", uuid::Uuid::new_v4()));
+        .with_id(format!("urn:uuid:{}", uuid::Uuid::new_v4()));
         self.sign(&mut vmc).await?;
         serde_json::to_string(vmc.credential()).map_err(|e| e.to_string())
     }
@@ -268,7 +268,7 @@ impl RoomIdentity {
             now + Duration::days(30),
         )
         .map_err(|e| format!("build the authority credential: {e}"))?
-        .with_id(&format!("urn:uuid:{}", uuid::Uuid::new_v4()));
+        .with_id(format!("urn:uuid:{}", uuid::Uuid::new_v4()));
         self.sign(&mut vac).await?;
         serde_json::to_string(vac.credential()).map_err(|e| e.to_string())
     }
