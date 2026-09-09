@@ -56,6 +56,13 @@ struct Room {
     /// The room's own signing identity. A room issues the credentials that govern it, so
     /// it needs a key of its own — see [`crate::owner`].
     identity: RoomIdentity,
+    /// What this room grants a member it admits.
+    ///
+    /// Different per room on purpose. Authorization is a property of the grant, not of the
+    /// screen: the same button is offered in both rooms and only works in one, because only
+    /// one room's owner conferred the action. A demo where every member could do everything
+    /// would be demonstrating storage.
+    member_actions: &'static [&'static str],
     /// The owner's own credentials for this room, so it can act as a member with `admin`.
     ///
     /// Minting an epoch at the host is a room operation like any other: it takes a
@@ -108,6 +115,9 @@ type Rooms = Arc<Demo>;
 #[serde(rename_all = "camelCase")]
 struct CatalogueEntry {
     room_id: String,
+    /// What this room grants a member. Shown before joining, because it is the difference
+    /// between the two rooms and the whole of what the demo is about.
+    grants: Vec<String>,
     /// The room's DID — what a member verifies its credentials against, recovered
     /// lexically because it is a `did:key`.
     room_did: String,
@@ -123,6 +133,7 @@ async fn catalogue(State(rooms): State<Rooms>) -> Json<Vec<CatalogueEntry>> {
             .values()
             .map(|r| CatalogueEntry {
                 room_id: r.id.clone(),
+                grants: r.member_actions.iter().map(|a| (*a).to_string()).collect(),
                 room_did: r.identity.did.clone(),
                 label: r.label.clone(),
                 epoch: (r.group.epoch() + 1) as u32,
@@ -290,7 +301,7 @@ async fn join(
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
     let authority = room
         .identity
-        .issue_authority(&req.did, &["read", "write"])
+        .issue_authority(&req.did, room.member_actions)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
 
@@ -317,7 +328,10 @@ async fn join(
             format!("member added — the group committed to epoch {epoch}"),
             "welcome sealed to that key package alone".into(),
             "membership credential issued".into(),
-            "authority credential issued — read, write".into(),
+            format!(
+                "authority credential issued — {}",
+                room.member_actions.join(", ")
+            ),
         ],
     }))
 }
@@ -493,9 +507,17 @@ async fn main() {
     println!("owner: {}", owner.did);
 
     let mut rooms = BTreeMap::new();
-    for (id, label) in [
-        ("demo-library", "The Library — a shared reading room"),
-        ("demo-workshop", "The Workshop — notes an agent can recall"),
+    for (id, label, member_actions) in [
+        (
+            "demo-library",
+            "The Library — a shared reading room",
+            &["read", "write"][..],
+        ),
+        (
+            "demo-workshop",
+            "The Workshop — notes an agent can recall",
+            &["read", "write", "curate"][..],
+        ),
     ] {
         // Identity first, then the group. A room is a DTG node before it is a set of keys,
         // and the order is forced: a host told about a room it named could never let it
@@ -531,6 +553,7 @@ async fn main() {
                 id: id.to_string(),
                 label: label.to_string(),
                 identity,
+                member_actions,
                 owner_membership,
                 owner_authority,
                 spent_invitations: Vec::new(),

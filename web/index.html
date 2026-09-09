@@ -114,6 +114,12 @@
       Task, and it authorises each one against a chain narrowed to that single action —
       <code>read</code> to list, <code>write</code> to store. It stores ciphertext and has
       no code path that could read it.</p>
+    <p><strong>Try this.</strong> Retract a record in each room. The Workshop grants
+      <code>curate</code> and the Library does not, so the same button works in one and is
+      refused in the other — refused <em>in this tab</em>, before any request is made,
+      because <code>attenuate</code> will not widen what the room gave you. "You were never
+      given this" and "the host disagreed" are different sentences, and only the first can
+      be answered by asking the owner.</p>
     <p><strong>Standing in.</strong> The owner. In a real room that is a person with an
       agent, deciding; here it admits anyone who asks and says so. What it issues is not
       pretended — the credentials are real and the ceremony is the same either side of the
@@ -214,7 +220,8 @@ async function loadRooms() {
     el.className = "card";
     el.innerHTML = `<strong>${r.label}</strong>
       <p class="mono" style="color:var(--muted);margin:.35rem 0">${r.roomId}</p>
-      <p style="color:var(--muted);font-size:13px">epoch ${r.epoch} · ${r.members} member(s)</p>`;
+      <p style="color:var(--muted);font-size:13px">epoch ${r.epoch} · ${r.members} member(s)</p>
+      <p style="color:var(--muted);font-size:13px">grants <code>${r.grants.join("</code>, <code>")}</code></p>`;
     const b = document.createElement("button");
     b.className = held ? "ghost" : "";
     b.textContent = held ? "Open" : "Ask to join";
@@ -325,12 +332,25 @@ const HOST = localStorage.getItem("dr:host") ?? "http://127.0.0.1:8300";
 /// Send one Trust Task to the host, signed, carrying a presentation for `action`.
 async function hostTask(type, action, payload) {
   const held = S.get("dr:room:" + currentRoom);
-  const presentation = JSON.parse(identity.present(
-    JSON.stringify(held.authority),
-    JSON.stringify(held.membership),
-    action,
-    null,            // no challenge: this host issues none. A nonce is the verifier's.
-  ));
+
+  // Minting the presentation can fail, and when it does the request is never made.
+  // `attenuate` refuses to widen, so asking for an action the room did not grant fails
+  // HERE — in your own key holder — rather than at the host. That is worth distinguishing
+  // on screen: "you were never given this" and "the host disagreed" are different
+  // sentences, and only the first can be answered by asking the owner.
+  let presentation;
+  try {
+    presentation = JSON.parse(identity.present(
+      JSON.stringify(held.authority),
+      JSON.stringify(held.membership),
+      action,
+      null,          // no challenge: this host issues none. A nonce is the verifier's.
+    ));
+  } catch (e) {
+    const err = new Error(e.message ?? String(e));
+    err.refusedLocally = true;
+    throw err;
+  }
 
   const document = {
     id: `urn:uuid:${crypto.randomUUID()}`,
@@ -387,25 +407,68 @@ async function loadRecords() {
     const el = document.createElement("div");
     el.className = "card";
     el.style.marginBottom = ".6rem";
-    let plaintext;
-    try {
-      plaintext = new TextDecoder().decode(
-        member.openRecord(r.key, BigInt(r.version), JSON.stringify(r.sealed)));
-    } catch (e) {
-      plaintext = null;
-      var why = String(e.message ?? e);
+    // A retracted record is a TOMBSTONE: the body is gone, the key and version stay, so
+    // the room's history still shows that something was here and is not any more. There is
+    // nothing to open, and trying reports a missing `ciphertext` — which reads as
+    // corruption rather than as the record having been withdrawn on purpose.
+    const retracted = r.status && r.status !== "active";
+
+    let plaintext = null;
+    let why = null;
+    if (!retracted) {
+      try {
+        plaintext = new TextDecoder().decode(
+          member.openRecord(r.key, BigInt(r.version), JSON.stringify(r.sealed)));
+      } catch (e) {
+        why = String(e.message ?? e);
+      }
     }
     el.innerHTML = `<div class="row" style="justify-content:space-between">
         <strong>${r.key}</strong>
         <span style="color:var(--muted);font-size:12px">v${r.version} · epoch ${r.sealed.epoch}</span>
       </div>
-      <p style="margin:.5rem 0">${plaintext !== null
-        ? plaintext.replace(/[<>&]/g, c => ({"<":"&lt;",">":"&gt;","&":"&amp;"}[c]))
-        : `<em style="color:var(--seal)">did not open — ${why}</em>`}</p>
-      <details><summary style="cursor:pointer;color:var(--muted);font-size:13px">what the host has</summary>
-        <div class="cipher mono">${r.sealed.ciphertext}</div></details>`;
+      <p style="margin:.5rem 0">${
+        retracted
+          ? `<em style="color:var(--seal)">${r.status} — the body is gone; the key and
+             version stay, so the room still shows something was here</em>`
+          : plaintext !== null
+            ? plaintext.replace(/[<>&]/g, c => ({"<":"&lt;",">":"&gt;","&":"&amp;"}[c]))
+            : `<em style="color:var(--seal)">did not open — ${why}</em>`
+      }</p>
+      ${retracted ? "" : `<details><summary style="cursor:pointer;color:var(--muted);font-size:13px">what the host has</summary>
+        <div class="cipher mono">${r.sealed.ciphertext}</div></details>`}`;
+    if (!retracted) {
+    const retract = document.createElement("button");
+    retract.className = "ghost";
+    retract.style.marginTop = ".6rem";
+    retract.textContent = "Retract";
+    retract.onclick = () => curate(r.key);
+    el.append(retract);
+    }
     box.append(el);
   }
+}
+
+/// Retract a record — which needs `curate`, an action `write` does not imply.
+///
+/// The Library grants `read` and `write`; the Workshop also grants `curate`. Same button in
+/// both, and in the Library it never reaches the network: `attenuate` refuses to widen what
+/// the room gave you, so your own key holder declines to mint a presentation for an action
+/// you were not granted.
+async function curate(key) {
+  try {
+    await hostTask("https://trusttasks.org/spec/rooms/records/curate/0.1", "curate", {
+      key, status: "retracted", reason: "retracted from the demo",
+    });
+  } catch (e) {
+    log(e.refusedLocally
+      ? `refused here, and never sent: ${e.message} — ask the room's owner for it, `
+        + `there is nothing the host could have done`
+      : `the host refused: ${e.message}`);
+    return;
+  }
+  log("");
+  await loadRecords();
 }
 
 async function write() {
