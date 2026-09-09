@@ -1,16 +1,14 @@
 [package]
 name = "dataroom-sample-room"
 version = "0.1.0"
-edition = "2021"
+# 2024, for `let ... && ...` chains — the shape the checks in `admission` are written in,
+# where a condition and the value it needs read as one clause rather than as a nest.
+edition = "2024"
 
 # The demo's only backend. It plays two parts a browser member cannot play for
 # itself — the room's **owner**, who admits people, and its **host**, who stores
 # what they write — and nothing else. Every other call the site makes is the
 # browser talking to its own copy of `vti-rooms`, compiled to wasm.
-[dev-dependencies]
-# The resolver a browser member uses, so the test asserts what a member would see.
-affinidi-did-resolver-traits = "0.1"
-affinidi-did-common = "0.4"
 
 [dependencies]
 # The same crate the browser runs, native. `mls` is the member/owner key layer;
@@ -30,8 +28,13 @@ base64 = "0.23"
 # authority chain links (parent id → parent digest), so a 0.7 issuer and a 0.6
 # verifier cannot interoperate.
 affinidi-tdk = "0.12"
-dtg-credentials = "0.9.1"
+# Resolving a room's own `did:peer` to find the mediator it advertises. Pure computation —
+# a member finds where to ask to join without a network and without a registry, which is the
+# property that let a room be a `did:peer` at all.
+affinidi-did-resolver-traits = "0.1"
+affinidi-did-common = "0.4"
 affinidi-secrets-resolver = "0.5"
+dtg-credentials = "0.9.1"
 affinidi-data-integrity = "0.7"
 reqwest = { version = "0.13", features = ["json"] }
 uuid = { version = "1", features = ["v4"] }
@@ -39,3 +42,7 @@ ed25519-dalek = "3"
 multibase = "0.9"
 getrandom = "0.4"
 chrono = "0.4"
+
+[dev-dependencies]
+# The admission checks are async — they verify a proof — so the tests need a runtime.
+tokio = { version = "1", features = ["rt", "macros"] }

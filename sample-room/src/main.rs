@@ -28,6 +28,8 @@
 //! and authorises nothing, which is why it says so on screen. The record path is real; the
 //! authority path is the next slice.
 
+mod admission;
+mod mediator;
 mod owner;
 
 use std::collections::BTreeMap;
@@ -37,8 +39,6 @@ use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::routing::{get, post};
 use axum::{Json, Router};
-use base64::Engine as _;
-use base64::engine::general_purpose::URL_SAFE_NO_PAD as B64;
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 use vti_rooms::mls::RoomGroup;
@@ -48,23 +48,23 @@ use vti_rooms::wire::EpochLink;
 use crate::owner::RoomIdentity;
 
 /// One demo room: its group, and the ciphertext its members have stored.
-struct Room {
+pub(crate) struct Room {
     /// The room's identifier. A real room mints a `did:webvh` before it tells any host;
     /// this one is a fixed string, because a demo room that could not be linked to is a
     /// demo nobody can open twice.
-    id: String,
+    pub(crate) id: String,
     /// A human name for the catalogue.
-    label: String,
+    pub(crate) label: String,
     /// The room's own signing identity. A room issues the credentials that govern it, so
     /// it needs a key of its own — see [`crate::owner`].
-    identity: RoomIdentity,
+    pub(crate) identity: RoomIdentity,
     /// What this room grants a member it admits.
     ///
     /// Different per room on purpose. Authorization is a property of the grant, not of the
     /// screen: the same button is offered in both rooms and only works in one, because only
     /// one room's owner conferred the action. A demo where every member could do everything
     /// would be demonstrating storage.
-    member_actions: &'static [&'static str],
+    pub(crate) member_actions: &'static [&'static str],
     /// The owner's own credentials for this room, so it can act as a member with `admin`.
     ///
     /// Minting an epoch at the host is a room operation like any other: it takes a
@@ -77,7 +77,7 @@ struct Room {
     /// The owner's half of single-use. The member enforces it too, in their own browser,
     /// and neither substitutes for the other: the member's copy stops *their* key holder
     /// being filled twice, this one stops a replayed invitation adding a second leaf.
-    spent_invitations: Vec<String>,
+    pub(crate) spent_invitations: Vec<String>,
     /// Every commit this room has made, in order, from epoch 2 onwards.
     ///
     /// **The piece the published ceremony does not have.** Every membership change is a
@@ -93,7 +93,7 @@ struct Room {
     /// Public, and safe to be: a commit is MLS handshake material that authenticates its
     /// committer *inside the group*. It confers nothing on a non-member, and a member who
     /// is entitled to the room is entitled to its history of membership changes.
-    commits: Vec<CommittedEpoch>,
+    pub(crate) commits: Vec<CommittedEpoch>,
     /// The room's group **and its epoch key chain**.
     ///
     /// `SealedRoom` rather than a bare `RoomGroup`, and that is the whole of what makes a
@@ -104,7 +104,7 @@ struct Room {
     ///
     /// The walk is backwards only, which is what keeps removal forward-only: a rung lets
     /// you go down from a key you hold, never up to one you do not.
-    room: SealedRoom,
+    pub(crate) room: SealedRoom,
     /// `key` → the record. Opaque: `sealed` is base64 ciphertext under a key this process
     /// never holds.
     records: BTreeMap<String, Record>,
@@ -117,11 +117,11 @@ struct Room {
 /// One commit and the epoch it produced.
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct CommittedEpoch {
+pub(crate) struct CommittedEpoch {
     /// The epoch the group is at *after* applying this. A member at `epoch - 1` needs it.
-    epoch: u32,
+    pub(crate) epoch: u32,
     /// The commit, base64url.
-    commit: String,
+    pub(crate) commit: String,
 }
 
 #[derive(Clone, Serialize)]
@@ -139,10 +139,10 @@ struct Record {
 /// Everything the sample holds: the rooms, the owner that governs them, and where their
 /// host is. One state rather than three globals, because the owner and the host URL are
 /// needed by the same handlers that touch a room.
-struct Demo {
-    owner: RoomIdentity,
-    host_url: String,
-    rooms: Mutex<BTreeMap<String, Room>>,
+pub(crate) struct Demo {
+    pub(crate) owner: RoomIdentity,
+    pub(crate) host_url: String,
+    pub(crate) rooms: Mutex<BTreeMap<String, Room>>,
 }
 
 type Rooms = Arc<Demo>;
@@ -187,39 +187,42 @@ struct InviteRequest {
     did: String,
 }
 
-/// Issue an invitation.
+/// Issue an invitation, over HTTP.
 ///
-/// A demo room admits anyone who asks, and says so on screen. What is *not* faked is the
-/// artefact: this is a real DTG credential, signed by the room, naming one subject, valid
-/// for an hour, single-use. A real owner decides whether to call this; the ceremony either
-/// side of it is identical.
+/// **The weaker of the two carriers, and deliberately the one for the sample's own
+/// catalogue.** It takes the asker's DID as a *claim*: there is no transport identity to
+/// check it against, so anybody who can reach this port can have an invitation minted naming
+/// anybody. That is fine for a local demo whose rooms admit all comers, and it is not the
+/// path a stranger uses — [`crate::mediator`] is, and there the request carries a proof of
+/// the room key and a binding to the connection it arrived on.
+///
+/// Both call the same [`crate::admission::issue_invitation`], so the credential is identical
+/// and neither carrier holds a rule the other does not.
 async fn invite(
-    State(rooms): State<Rooms>,
+    State(demo): State<Rooms>,
     Path(room_id): Path<String>,
     Json(req): Json<InviteRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    let rooms = rooms.rooms.lock().await;
-    let room = rooms
-        .get(&room_id)
-        .ok_or((StatusCode::NOT_FOUND, format!("no room `{room_id}`")))?;
+    // The catalogue addresses rooms by slug; admission addresses them by DID, because that
+    // is all a member has. Translate here rather than teaching admission about slugs.
+    let room_did = {
+        let rooms = demo.rooms.lock().await;
+        rooms
+            .get(&room_id)
+            .map(|r| r.identity.did.clone())
+            .ok_or((StatusCode::NOT_FOUND, format!("no room `{room_id}`")))?
+    };
 
-    let invitation = room
-        .identity
-        .invite(&req.did)
+    admission::issue_invitation(&demo, &room_did, &req.did)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
-
-    Ok(Json(serde_json::json!({
-        "invitation": serde_json::from_str::<serde_json::Value>(&invitation)
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?,
-        "roomDid": room.identity.did,
-    })))
+        .map(Json)
+        .map_err(|r| (r.status(), r.message))
 }
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct JoinRequest {
-    /// The visitor's own `did:key`, minted in their browser.
+    /// The visitor's own room `did:key`, minted in their browser.
     did: String,
     /// Their KeyPackage, base64url — the public half of an identity they keep privately.
     key_package: String,
@@ -227,161 +230,39 @@ struct JoinRequest {
     invitation: serde_json::Value,
 }
 
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-struct JoinResponse {
-    room_id: String,
-    /// The Welcome, base64url. Sealed to the KeyPackage above and to nothing else.
-    welcome: String,
-    /// The room's epoch after the commit this admission produced.
-    epoch: u32,
-    /// The room's attestation that this DID belongs to it.
-    membership: serde_json::Value,
-    /// What this member may do — the chain root they attenuate from, per request.
-    authority: serde_json::Value,
-    /// Each step the owner took, so the site can show the ceremony rather than a spinner.
-    steps: Vec<String>,
-}
-
-/// Admit anyone who asks — see the module docs on why that is stated rather than hidden.
+/// Admit a member, over HTTP.
+///
+/// The same caveat as [`invite`]: `did` is a claim here, where over DIDComm it is proved by
+/// the request's own `eddsa-jcs-2022` proof. The invitation check catches most of what that
+/// would — an invitation names one subject and is not transferable — but "most of" is the
+/// honest word, and the DIDComm carrier is the one with the property.
 async fn join(
     State(demo): State<Rooms>,
     Path(room_id): Path<String>,
     Json(req): Json<JoinRequest>,
-) -> Result<Json<JoinResponse>, (StatusCode, String)> {
-    let (owner, host_url) = (&demo.owner, demo.host_url.clone());
-    let mut rooms = demo.rooms.lock().await;
-    let room = rooms
-        .get_mut(&room_id)
-        .ok_or((StatusCode::NOT_FOUND, format!("no room `{room_id}`")))?;
+) -> Result<Json<admission::Admitted>, (StatusCode, String)> {
+    let room_did = {
+        let rooms = demo.rooms.lock().await;
+        rooms
+            .get(&room_id)
+            .map(|r| r.identity.did.clone())
+            .ok_or((StatusCode::NOT_FOUND, format!("no room `{room_id}`")))?
+    };
 
-    // The owner's half of the two-party check. The member checked this invitation too,
-    // in their own browser, and neither substitutes for the other: theirs stops their key
-    // holder being filled with a room they never agreed to join; this one stops a replayed
-    // or forged invitation adding a leaf to the group.
-    let invitation: dtg_credentials::DTGCredential =
-        serde_json::from_value(req.invitation.clone())
-            .map_err(|e| (StatusCode::BAD_REQUEST, format!("invitation: {e}")))?;
-    let credential_id = invitation
-        .id()
-        .ok_or((
-            StatusCode::BAD_REQUEST,
-            "the invitation carries no id, so single use cannot be enforced".to_string(),
-        ))?
-        .to_string();
+    let request = admission::AdmissionRequest {
+        room_did,
+        member_did: req.did.clone(),
+        // No transport identity on this carrier. Named as the member's own DID rather than
+        // left empty so the field never reads as "some other party sent this".
+        transport_did: req.did,
+        key_package: Some(req.key_package),
+        invitation: Some(req.invitation),
+    };
 
-    if invitation.issuer() != room.identity.did {
-        return Err((
-            StatusCode::FORBIDDEN,
-            format!(
-                "that invitation was issued by `{}`, not by this room",
-                invitation.issuer()
-            ),
-        ));
-    }
-    if invitation.subject() != req.did {
-        return Err((
-            StatusCode::FORBIDDEN,
-            format!(
-                "that invitation names `{}`, not you — an invitation is not transferable",
-                invitation.subject()
-            ),
-        ));
-    }
-    // Against the room's own key, which the owner holds. Not re-derived from the room's
-    // identifier: that is a `did:key` or a `did:peer` depending on whether the room
-    // advertises a mediator, and only a member — who has nothing but the identifier — has
-    // to resolve it.
-    invitation
-        .verify_proof_with_public_key(room.identity.public_key())
-        .map_err(|_| {
-            (
-                StatusCode::FORBIDDEN,
-                "that invitation's proof does not verify against this room's key".to_string(),
-            )
-        })?;
-    if room.spent_invitations.contains(&credential_id) {
-        return Err((
-            StatusCode::CONFLICT,
-            format!("invitation `{credential_id}` has already been used"),
-        ));
-    }
-
-    let key_package = B64
-        .decode(req.key_package.as_bytes())
-        .map_err(|e| (StatusCode::BAD_REQUEST, format!("key package: {e}")))?;
-
-    // Returns the rung alongside the commit, because the rung can only be minted in the
-    // one moment any party holds both the outgoing epoch's key and the incoming one.
-    // Afterwards it is unrecoverable — the outgoing key is gone.
-    let (change, link) = room
-        .room
-        .add_member(&key_package)
-        .map_err(|e| (StatusCode::BAD_REQUEST, format!("add member: {e}")))?;
-
-    // A removal produces no Welcome; an addition always does. If this is ever `None` the
-    // member would join a group nobody added them to, which fails at the first read looking
-    // like a bad Welcome rather than a wrong identity — so it is an error here instead.
-    let welcome = change.welcome.ok_or((
-        StatusCode::INTERNAL_SERVER_ERROR,
-        "adding a member produced no Welcome".to_string(),
-    ))?;
-
-    // Kept so members already in the room can catch up. A member added at epoch 3 needs
-    // every commit from 4 onwards; one added at 5 needs none of them, because their Welcome
-    // carried the group as it stood.
-    room.commits.push(CommittedEpoch {
-        epoch: (change.epoch + 1) as u32,
-        commit: B64.encode(&change.commit),
-    });
-
-    // Consumed only now, after the join succeeded. Spending it earlier would burn an
-    // invitation on a failed attempt and leave the member unable to retry.
-    room.spent_invitations.push(credential_id);
-
-    // Membership and authority are separate acts because they are separate facts: being a
-    // member is not being allowed to write. A demo visitor gets `read` and `write` and not
-    // `curate` or `admin`, so the room has a governance surface rather than one bit.
-    let membership = room
-        .identity
-        .issue_membership(&req.did)
+    admission::admit(&demo, &request)
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
-    let authority = room
-        .identity
-        .issue_authority(&req.did, room.member_actions)
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
-
-    let epoch = (change.epoch + 1) as u32;
-
-    // The commit advanced the epoch, so the host has to be told before the new member can
-    // write anything: a record is sealed under the epoch current when it was written, and
-    // a host refuses ciphertext bound to an epoch it does not know about.
-    if let Err(e) = mint_epoch(&host_url, &owner, room, epoch, link.as_ref()).await {
-        return Err((StatusCode::BAD_GATEWAY, e));
-    }
-
-    Ok(Json(JoinResponse {
-        room_id,
-        welcome: B64.encode(welcome),
-        epoch,
-        membership: serde_json::from_str(&membership)
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?,
-        authority: serde_json::from_str(&authority)
-            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?,
-        steps: vec![
-            "invitation verified — issued by this room, to you, unspent".into(),
-            "key package validated against the room's ciphersuite".into(),
-            format!("member added — the group committed to epoch {epoch}"),
-            "welcome sealed to that key package alone".into(),
-            "membership credential issued".into(),
-            format!(
-                "authority credential issued — {}",
-                room.member_actions.join(", ")
-            ),
-        ],
-    }))
+        .map(Json)
+        .map_err(|r| (r.status(), r.message))
 }
 
 async fn list_records(
@@ -497,7 +378,7 @@ async fn next_version(
 /// members, which is what lets somebody who joined at epoch 5 read epoch 2 — they walk down
 /// from the key they hold. Sending the epoch without the rung is what `FromJoin` looks
 /// like, and it is what this demo did until the owner started driving a `SealedRoom`.
-async fn mint_epoch(
+pub(crate) async fn mint_epoch(
     host_url: &str,
     owner: &RoomIdentity,
     room: &Room,
@@ -684,6 +565,22 @@ async fn main() {
         host_url,
         rooms: Mutex::new(rooms),
     });
+
+    // The owner listens as each room, so somebody who resolved the room's DID and read its
+    // service block reaches the party that can admit them — knowing nothing else about this
+    // sample, its catalogue, or its port. That is the half of "one site, any number of
+    // rooms" HTTP could not carry.
+    //
+    // Not fatal if it fails. The demo is still worth running against its own catalogue, and
+    // a process that refused to start because a remote mediator was down would be worse. But
+    // it is said out loud, because a room advertising a mediator its owner never reached
+    // looks joinable and is not.
+    if let Some(mediator) = mediator_did.clone() {
+        if let Err(e) = mediator::listen(rooms.clone(), mediator).await {
+            eprintln!("warning: the owner is not listening on the mediator — {e}");
+            eprintln!("         rooms still advertise it, so joining by DID will time out.");
+        }
+    }
 
     let web = std::env::var("DEMO_WEB_DIR").unwrap_or_else(|_| "../web".to_string());
     let app = Router::new()

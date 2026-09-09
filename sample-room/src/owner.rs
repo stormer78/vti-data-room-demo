@@ -32,9 +32,20 @@ use chrono::{Duration, Utc};
 use dtg_credentials::DTGCredential;
 
 /// A room's signing identity.
+///
+/// Two fields for the keys, and the split is the point. `signing` is the Ed25519 key the
+/// room signs credentials with — the one a member verifies lexically out of the room's own
+/// identifier. `secrets` is *every* key the identity holds, which for a `did:peer:2` also
+/// includes the X25519 key agreement half; DIDComm needs that one to decrypt what is sent
+/// to the room, and a resolver handed only the signing key can authenticate an inbound
+/// message it cannot open.
+///
+/// The first cut kept only `#key-1` and dropped the rest on the floor, which was correct
+/// while the room only ever signed and wrong the moment it had to listen.
 pub struct RoomIdentity {
     pub did: String,
-    secret: affinidi_secrets_resolver::secrets::Secret,
+    signing: affinidi_secrets_resolver::secrets::Secret,
+    secrets: Vec<affinidi_secrets_resolver::secrets::Secret>,
 }
 
 /// The DIDComm service a room advertises: reach me through this mediator.
@@ -101,12 +112,17 @@ impl RoomIdentity {
         // `#key-1` is the Ed25519 verification key — the one a room signs with. `#key-2` is
         // key agreement and cannot sign, which is a distinction worth making by name rather
         // than by position.
-        let secret = secrets
-            .into_iter()
+        let signing = secrets
+            .iter()
             .find(|s| s.id.ends_with("#key-1"))
+            .cloned()
             .ok_or("the minted did:peer has no verification key")?;
 
-        Ok(Self { did, secret })
+        Ok(Self {
+            did,
+            signing,
+            secrets,
+        })
     }
 
     fn mint_key() -> Result<Self, String> {
@@ -138,7 +154,14 @@ impl RoomIdentity {
         )
         .map_err(|e| format!("build the room's signing secret: {e}"))?;
 
-        Ok(Self { did, secret })
+        // One key, and it is the whole identity: a `did:key` has no separate key-agreement
+        // half. DIDComm still reaches such a DID — the encryption key is derived from the
+        // Ed25519 one by the Montgomery map — but nothing here has to hold it.
+        Ok(Self {
+            did,
+            secrets: vec![secret.clone()],
+            signing: secret,
+        })
     }
 
     /// This identity's Ed25519 public key.
@@ -149,7 +172,15 @@ impl RoomIdentity {
     /// a multibase error about a colon. A party that holds a key does not need to parse its
     /// own name to find it.
     pub fn public_key(&self) -> &[u8] {
-        self.secret.get_public_bytes()
+        self.signing.get_public_bytes()
+    }
+
+    /// Every key this identity holds, for a secrets resolver.
+    ///
+    /// The signing key **and** the key-agreement key, because a party that can be written to
+    /// over DIDComm has to be able to decrypt as well as prove who it is.
+    pub fn secrets(&self) -> &[affinidi_secrets_resolver::secrets::Secret] {
+        &self.secrets
     }
 
     /// An invitation to `subject`: consent to join, single-use, and short-lived.
@@ -231,7 +262,7 @@ impl RoomIdentity {
             .remove("proof");
         let proof = affinidi_data_integrity::DataIntegrityProof::sign(
             &doc,
-            &self.secret,
+            &self.signing,
             affinidi_data_integrity::SignOptions::new(),
         )
         .await
@@ -278,7 +309,7 @@ impl RoomIdentity {
 
     async fn sign(&self, credential: &mut DTGCredential) -> Result<(), String> {
         credential
-            .sign(&self.secret, None)
+            .sign(&self.signing, None)
             .await
             .map(|_| ())
             .map_err(|e| format!("sign as the room: {e}"))

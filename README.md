@@ -26,21 +26,48 @@ not know — provided you hold credentials for it. That is the whole of "one sit
 of rooms", and it only stays true if the site has no special path for the room shipped
 beside it.
 
-**The two halves of that claim are not equally true, and the difference is the honest
-boundary of what this demonstrates.** Working *in* a room is host-only — list, get, put,
-curate, the epoch chain — and a host needs nothing but the request: a signed document and a
-chain the room issued. So that half works against any host, from a link. **Admission does
-not.** It needs the room's owner, who is reachable over DIDComm at the mediator the room
-advertises — and a `did:key` room advertises nothing, because a `did:key` has no service
-block.
+**The two halves of that claim were not equally true, and the gap is what the DIDComm leg
+closes.** Working *in* a room is host-only — list, get, put, curate, the epoch chain — and a
+host needs nothing but the request: a signed document and a chain the room issued. That half
+always worked against any host, from a link. **Admission did not.** It needs the room's
+owner, and the only way to reach an owner was this sample's own HTTP catalogue — so the site
+could admit you only to a room it was already configured for, which is the opposite of the
+claim.
 
-**Set `MEDIATOR_DID` and the sample's rooms become `did:peer:2`**, which can carry a
-service block and so can advertise where their owner listens. Both sides already verify
-such a room with no network — `vta-sdk`'s verifier and the browser's invitation gate both
-resolve `did:peer` by computation. What is *not* built is the leg that uses it: the browser
-does not yet speak DIDComm, so an advertised mediator is a true statement nobody acts on.
-Until it does, you can be handed a room you already hold keys for, but you cannot be let
-into one the site was not told about.
+**Set `MEDIATOR_DID` and a room becomes `did:peer:2`**, which carries a service block, so it
+can say where its owner listens. The owner then connects to that mediator **as each room**,
+and a member who resolved the room's DID reaches the party that can admit them knowing
+nothing else. `sample-room/src/bin/join-by-did.rs` is that member, in one argument:
+
+```
+cargo run --bin join-by-did -- did:peer:2.Vz6Mk…
+```
+
+No host URL, no catalogue, no port. It resolves the room (pure computation — no network),
+reads the mediator out of it, mints its two identities, asks, verifies the VIC it gets back,
+presents it with a KeyPackage, and joins the group. What is *not* done yet is the same leg in
+the browser: the site still admits through the sample's HTTP catalogue, so the JavaScript
+member is the one party that cannot yet join a room it was not told about.
+
+### A member holds two identities, and they are not interchangeable
+
+- a **transport identity** (`did:peer:2`) — how the mediator addresses them, and what
+  DIDComm's authcrypt proves;
+- a **room identity** (`did:key`, minted in wasm) — what the room's credentials name, and
+  what signs every document the host authenticates them by.
+
+The VIC has to name the second, because that is the key that will later sign records. But the
+second is not what sent the message. So a request carries **both** proofs — the DIDComm
+envelope for the transport identity, an `eddsa-jcs-2022` proof inside the body for the room
+identity — and the body names the transport DID so the two are bound. Without that last part
+a signed request is a bearer artefact: anybody who saw one could send it from their own
+transport identity and be handed the room's reply. There is a test per clause.
+
+Admission is **not** a Trust Task, and that is deliberate. `rooms/owner/{invite,
+issue-membership,issue-authority}` are real ones and the owner performs all three — but a
+Trust Task is an instruction you give *your own* agent. A stranger asking an owner to decide
+something is the opposite, and dressing it up as a Trust Task would say the stranger may
+instruct the room's agent.
 
 Production mints `did:webvh` rather than either, for a reason neither has: a room's
 controller must be able to change, and transferring ownership is a controller change.
@@ -69,10 +96,17 @@ cd sample-room && DEMO_WEB_DIR=../web cargo run
 # → http://127.0.0.1:8787
 ```
 
-Add `MEDIATOR_DID=did:key:z6Mk…` to make the rooms `did:peer:2` and advertise it. Without
-it they are `did:key` and advertise nothing, which is honest rather than broken — a room
-pointing at somewhere nobody listens fails at the join, while a room pointing nowhere says
-so before you try.
+Add `MEDIATOR_DID=…` to make the rooms `did:peer:2`, advertise it, and have the owner listen
+there. Without it they are `did:key` and advertise nothing, which is honest rather than
+broken — a room pointing at somewhere nobody listens fails at the join, while a room pointing
+nowhere says so before you try.
+
+```
+MEDIATOR_DID=did:webvh:…:mediator DEMO_WEB_DIR=../web cargo run
+# → listening for did:peer:2.Vz6Mk… at did:webvh:…
+
+cargo run --bin join-by-did -- did:peer:2.Vz6Mk…      # in another terminal
+```
 
 ## What is real, and what is not
 
