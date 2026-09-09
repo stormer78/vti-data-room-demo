@@ -164,10 +164,8 @@
 
 <script type="module">
 import init, { mintKeyPackage, verifyInvitation, Identity, RoomMember } from "./vendor/vti_rooms.js";
-import {
-  ADMITTED, INVITATION, OwnerConnection, REQUEST_ADMISSION, REQUEST_INVITATION,
-  advertisedMediator, mintTransportIdentity, preferredCarrier, signedRequest,
-} from "./admission.js";
+import { requestAdmission, requestInvitation } from "./admission.js";
+import { advertised, closeLinks, linkTo, mintTransportIdentity } from "./carrier.js";
 
 // The module is ~1.9 MB and every handler below depends on it, so the buttons stay
 // disabled until it is ready. Without this the page looks finished before it is, and a
@@ -250,6 +248,28 @@ function renderIdentity() {
   $("rooms-panel").classList.remove("hide");
 }
 
+/// This page's transport identity, minted once and shared by every link.
+///
+/// One rather than one per conversation: a mediator addresses a DID and permits it one
+/// socket, so two identities would mean two sockets to the same mediator for the same person
+/// — and the mediator would evict one of them.
+let transport = null;
+
+/// A link to whoever `did` is, and the carrier they say they serve.
+///
+/// The link is per **mediator**, not per party: a room's owner and its host are usually on
+/// the same one, and one socket is what a mediator allows. Reused across the page.
+async function connect(did) {
+  transport ??= mintTransportIdentity();
+  const found = await linkTo(did, transport);
+  if (!found) {
+    throw new Error(
+      `${did} advertises nowhere to reach it — a did:key can be verified but not dialled`,
+    );
+  }
+  return found;
+}
+
 /// Open a room named in the URL rather than listed by the sample.
 ///
 /// Works when this browser already holds keys for it — which is the case that matters,
@@ -299,8 +319,17 @@ async function openAddressedRoom() {
 // Conflating them is not cosmetic — it was caught here by the invitation check, which
 // refused a perfectly good invitation on the grounds that `demo-library` had not issued
 // it. That refusal was correct.
+/// The catalogue as this page last read it, so a join knows where the room's records live.
+///
+/// A room's identifier deliberately does not name its host — a room may be served by several,
+/// and one that named its host could never move — so somebody has to say. For a listed room
+/// that is the catalogue; for an addressed one it is the `?at=` in the link.
+let catalogue = [];
+const hostFor = (roomId) => catalogue.find((r) => r.roomId === roomId)?.host;
+
 async function loadRooms() {
   const rooms = await (await fetch("/api/rooms")).json();
+  catalogue = rooms;
   $("rooms").innerHTML = "";
   for (const r of rooms) {
     const held = S.get(key("room:" + r.roomDid));
@@ -372,7 +401,7 @@ async function join(roomId, roomDid) {
   // only because this sample's OWNER routes on it — the host never sees it, and a room
   // addressed by URL has none, which is why every use of it below is conditional.
   S.set(key("room:" + roomDid), {
-    snapshot: member.snapshot(), roomDid, host: SAMPLE_HOST, slug: roomId,
+    snapshot: member.snapshot(), roomDid, host: hostFor(roomId) ?? SAMPLE_HOST, slug: roomId,
     membership: out.membership, authority: out.authority,
   });
 
@@ -420,39 +449,29 @@ async function joinByDid(roomDid) {
   if (S.get(key("room:" + roomDid))) { await openRoom(roomDid); return; }
 
   const mine = [];
-  let connection = null;
   try {
-    const advertised = advertisedMediator(roomDid);
-    if (!advertised) {
+    const where = advertised(roomDid);
+    if (!where) {
       log(`${roomDid} advertises no mediator, so there is nowhere to ask to join. A `
         + `did:key room can be verified but not reached — only a method with a service `
         + `block can say where its owner listens.`);
       return;
     }
-    // The room's own document decides the carrier — TSP where it is offered, DIDComm
-    // otherwise. Not "whatever works": a mediator carries both on one socket, so guessing
-    // TSP would usually succeed and would break against an owner that only serves DIDComm,
-    // with nothing in the room's document having changed to warn you.
-    const carrier = preferredCarrier(advertised);
-    mine.push(`resolved the room — it listens at ${advertised.mediator}, over `
-      + `${[advertised.tsp && "TSP", advertised.didcomm && "DIDComm"].filter(Boolean).join(" and ")}`);
+    mine.push(`resolved the room — it listens at ${where.mediator}, over `
+      + `${[where.tsp && "TSP", where.didcomm && "DIDComm"].filter(Boolean).join(" and ")}`);
 
-    // Disposable, and minted per join. It is a routing address; nothing is issued to it.
     log("opening a connection to the room's mediator…");
-    const transport = mintTransportIdentity();
-    mine.push(`transport identity minted — ${transport.identity.did.slice(0, 32)}…`);
-
-    connection = await OwnerConnection.open(roomDid, transport, carrier);
+    // Reused for the rest of the page: one socket per mediator is what a mediator allows,
+    // and the room's host is usually reachable through the same one.
+    const { link, carrier } = await connect(roomDid);
+    mine.push(`transport identity minted — ${link.transportDid.slice(0, 32)}…`);
     mine.push(`connected over ${carrier === "tsp" ? "TSP" : "DIDComm"} — one socket, which `
       + `is all a mediator gives per DID`);
 
     // 1 · Ask. Signed by the room key in wasm, naming the transport identity, so the owner
     //     can bind what was signed to the connection it arrived on.
     log("asking the room's owner for an invitation…");
-    const ask = signedRequest(identity, roomDid, transport.identity.did);
-    const reply = await connection.ask(REQUEST_INVITATION, ask);
-    if (reply.type !== INVITATION) throw new Error(`expected an invitation, got ${reply.type}`);
-    const invitation = reply.body.invitation;
+    const invitation = (await requestInvitation(link, carrier, roomDid, identity)).invitation;
     const vic = JSON.stringify(invitation);
     mine.push("invitation received — from the room, not from this site");
 
@@ -467,14 +486,7 @@ async function joinByDid(roomDid) {
 
     // 4 · Present both.
     log("presenting the invitation and a key package…");
-    const present = signedRequest(identity, roomDid, transport.identity.did, {
-      keyPackage, invitation,
-    });
-    const admittedReply = await connection.ask(REQUEST_ADMISSION, present);
-    if (admittedReply.type !== ADMITTED) {
-      throw new Error(`expected admission, got ${admittedReply.type}`);
-    }
-    const out = admittedReply.body;
+    const out = await requestAdmission(link, carrier, roomDid, identity, keyPackage, invitation);
 
     // 5 · Accept the Welcome.
     member = RoomMember.join(roomDid, minted, b64u.dec(out.welcome), vic, spent());
@@ -508,11 +520,7 @@ async function joinByDid(roomDid) {
     await loadRooms();
     log("");
   } catch (e) {
-    log("could not join over DIDComm: " + (e.message ?? e));
-  } finally {
-    // The connection is per-admission. Records go to the host over HTTP and need nothing
-    // from the owner, so holding a socket open past the join would hold it for nothing.
-    connection?.close();
+    log("could not join: " + (e.message ?? e));
   }
 }
 
@@ -667,23 +675,58 @@ async function hostTask(type, action, payload) {
     issuedAt: new Date().toISOString().replace(/\.\d+Z$/, "Z"),
     payload: { roomId: currentRoomDid, presentation, ...payload },
   };
+  const signed = identity.signDocument(JSON.stringify(document));
 
-  const res = await fetch(`${held.host ?? SAMPLE_HOST}/trust-tasks`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: identity.signDocument(JSON.stringify(document)),
-  });
-  const body = await res.json().catch(() => null);
-  if (!res.ok) {
-    // A host's `trust-task-error` is its ANSWER, not a broken network — so it is shown
-    // as a refusal with the host's own words, never as a failed request.
-    const reason = body?.payload?.reason ?? body?.payload?.message ?? JSON.stringify(body);
-    throw new Error(reason);
+  // **The same bytes, whichever way they travel.** A host takes the presenter from this
+  // document's own proof and the authority from the chain inside it, so a request is exactly
+  // as authorized over a socket as over a POST — the carrier authenticates its sender and
+  // that confers nothing. Which is why this is one signature and two ways to post it, rather
+  // than two request paths.
+  const where = held.host ?? SAMPLE_HOST;
+  const answer = where.startsWith("did:")
+    ? await hostOverMediator(where, JSON.parse(signed))
+    : await hostOverHttp(where, signed);
+
+  // The answer is the document, and it says for itself whether it is one. `trust-task-error`
+  // is the framework's own marker; over HTTP the status says the same thing a second time,
+  // and over a socket there is no status to say it — so the document is what both read.
+  if (String(answer.type ?? "").includes("trust-task-error")) {
+    const p = answer.payload ?? {};
+    // A host's refusal is its ANSWER, not a broken network — shown in the host's own words.
+    throw new Error(p.reason ?? p.message ?? p.code ?? JSON.stringify(answer));
   }
-  return body.payload;
+  return answer.payload;
 }
 
-/// List, then fetch each record.
+/// Post a signed Trust Task to a host at a URL.
+async function hostOverHttp(host, signed) {
+  const res = await fetch(`${host}/trust-tasks`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: signed,
+  });
+  const body = await res.json().catch(() => null);
+  if (!body) throw new Error(`the host at ${host} answered with nothing readable`);
+  return body;
+}
+
+/// Send a signed Trust Task to a host reachable only at a mediator.
+///
+/// **What this buys is reach, not authority.** A URL address needs the host to be somewhere a
+/// member's browser is allowed to open — a public name, a certificate, an origin on its
+/// allow-list. A DID address needs none of that: both sides dial a mediator and neither has
+/// to be reachable by the other. A host behind NAT, on a laptop, or on an origin no browser
+/// would be permitted to call is reached exactly like a phone is.
+///
+/// A Trust Task already has a binding for each carrier, so nothing is invented here: the
+/// DIDComm one wraps the document under a single reserved envelope type, and the TSP one is
+/// the document itself, byte-identical to the body that would have been POSTed.
+async function hostOverMediator(hostDid, document) {
+  const { link, carrier } = await connect(hostDid);
+  return await link.askTrustTask(hostDid, carrier, document);
+}
+
+/// List, then fetch each record./// List, then fetch each record.
 ///
 /// Two calls because they are two questions. `list` answers "what is in this room" and
 /// returns **metadata only, never bodies** — a host that returned content on a list would
@@ -785,16 +828,41 @@ async function write() {
   const body = $("rec-body").value;
   if (!key) { log("a record needs a key"); return; }
 
-  // Create-only, so the version is known without asking: `expectedVersion: 0` is the
-  // precondition "this key does not exist yet". It matters because the version is bound
-  // *into* the ciphertext along with the room, the key and the epoch — seal against the
-  // wrong one and the record stores fine and never opens.
-  const sealed = JSON.parse(member.sealRecord(key, 1n, new TextEncoder().encode(body)));
+  // **Ask what version this will be, then seal against the answer.**
+  //
+  // Versions are monotonic **per room**, not per record — the host allocates the room's
+  // `next_version` to whatever is written next, whichever key it is under. So the second
+  // record in a room is version 2 even though it is that key's first.
+  //
+  // This mattered because the version is bound *into* the ciphertext along with the room,
+  // the key and the epoch. Sealing against a guess stores fine and never opens, and the
+  // symptom is a record that lists correctly and then refuses — which reads as corruption
+  // rather than as a number that was wrong before it was written. This used to pass `1`,
+  // and so the first record in any room worked and every one after it did not.
+  //
+  // Derived from the listing rather than from a counter this page keeps, because the page's
+  // count is only its own writes and any other member's would be missing from it.
+  let nextVersion;
+  try {
+    const listed = (await hostTask(
+      "https://trusttasks.org/spec/rooms/records/list/0.1", "read", {})).records ?? [];
+    nextVersion = listed.reduce((m, r) => Math.max(m, Number(r.version ?? 0)), 0) + 1;
+  } catch (e) { log("could not read the room before writing: " + e.message); return; }
+
+  // There is a race here and it is worth naming: two members sealing against the same
+  // answer both get it, and the second one's record stores and never opens. `expectedVersion`
+  // guards the *key*, not the room's counter, so nothing catches it. A real client re-reads
+  // and re-seals on conflict; a two-person demo says so instead.
+  const sealed = JSON.parse(
+    member.sealRecord(key, BigInt(nextVersion), new TextEncoder().encode(body)));
 
   try {
     // `write`, not `read`. The presentation is narrowed to exactly this action, and a
     // member holding only `read` is refused by their own `attenuate` before the host
     // ever sees it.
+    // `expectedVersion: 0` is create-only — "this key does not exist yet" — and is about
+    // the key, where the number sealed above is about the room. Two different questions that
+    // both happen to be spelled as a version.
     await hostTask("https://trusttasks.org/spec/rooms/records/put/0.1", "write", {
       key, sealed, expectedVersion: 0,
     });
@@ -813,6 +881,10 @@ for (const name of WHO) {
   b.onclick = async () => {
     who = name;
     S.set("dr:who", who);
+    // The socket is authenticated as one transport DID, and a different member is a
+    // different party. Dropped rather than reused, so nobody inherits somebody else's link.
+    closeLinks();
+    transport = null;
     load();
     renderIdentity();
     // Panels belong to the identity that opened them.

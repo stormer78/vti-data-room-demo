@@ -123,6 +123,20 @@ cd sample-room && DEMO_WEB_DIR=../web cargo run
 # → http://127.0.0.1:8787
 ```
 
+Or with every leg over a mediator and no browser-reachable URL anywhere:
+
+```
+room-host --features didcomm … --mediator-did did:webvh:…:mediator   # prints its host DID
+#   note: no --allow-origin, so the page cannot reach it over HTTP at all
+
+MEDIATOR_DID=did:webvh:…:mediator ROOM_HOST_DID=did:peer:2.Vz6Mk… \
+  DEMO_WEB_DIR=../web cargo run
+```
+
+The owner keeps using the host's URL while telling members its DID, and that is not an
+inconsistency — it is the shape. The owner is a server and can open a URL; a browser often
+cannot. One host serves both at once and the client picks.
+
 Add `MEDIATOR_DID=…` to make the rooms `did:peer:2`, advertise it, and have the owner listen
 there. Without it they are `did:key` and advertise nothing, which is honest rather than
 broken — a room pointing at somewhere nobody listens fails at the join, while a room pointing
@@ -143,11 +157,21 @@ same crate the services link, not a re-implementation. The invitation is a signe
 credential and the browser checks all six clauses before it will mint a KeyPackage or
 accept a Welcome. The host holds ciphertext and has no code path that could read it.
 
-**Not yet.** The authority chain. A real host takes two things from a request — the
-presenter, from the document's own `eddsa-jcs-2022` proof, and a chain verified against
-credentials the room issued — and until the browser can mint an authority presentation it
-cannot speak that surface. Until then `sample-room` serves a plain HTTP record API, which
-is the one place this demo is standing in for something rather than being it.
+**Also real: the record path never touches a URL.** Set `ROOM_HOST_DID` and members are
+given the host's DID instead of its address, and reach it through the same mediator. The
+demonstration is that this is not a fallback — start `room-host` with **no `--allow-origin`
+at all**, so the page cannot open an HTTP request to it under any circumstances, and sealing,
+writing, listing, re-opening and the epoch chain all still work.
+
+What that buys is reach, not authority. A URL address requires the *member* to be somewhere
+that can open it; a DID address requires nothing of either side but a mediator they share. A
+host on a laptop, behind NAT, or on an origin no browser would be permitted to call is
+reached exactly the way a phone is.
+
+Nothing about authorization changes, and that is the design: the presenter comes from the
+document's own `eddsa-jcs-2022` proof and the authority from the chain the room issued, so
+the same bytes are as authorized over a socket as over a POST. `room-host` runs one
+`dispatch` for all three carriers and has a test that they answer identically.
 
 **Deliberately not shown.** The `private` visibility tier. Its subject binding has to be
 proved in zero knowledge and the working group has not settled the profile; a demo tier

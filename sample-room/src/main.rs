@@ -142,6 +142,16 @@ struct Record {
 pub(crate) struct Demo {
     pub(crate) owner: RoomIdentity,
     pub(crate) host_url: String,
+    /// The address this sample hands **members** for its host.
+    ///
+    /// Not the same field as `host_url`, and the difference is the point rather than an
+    /// inconsistency. The owner is a server: it can open a URL, so it does. A browser often
+    /// cannot — the host may be behind NAT, on a laptop, or on an origin no page is permitted
+    /// to call — so it is given the host's DID and reaches it through a mediator instead.
+    ///
+    /// One host, serving both at once, and the client picks. That is the shape a real
+    /// deployment has, and collapsing the two fields would hide it.
+    pub(crate) member_host: String,
     pub(crate) rooms: Mutex<BTreeMap<String, Room>>,
 }
 
@@ -151,6 +161,15 @@ type Rooms = Arc<Demo>;
 #[serde(rename_all = "camelCase")]
 struct CatalogueEntry {
     room_id: String,
+    /// Where this room's records live, as an address a member can act on.
+    ///
+    /// A URL or a **host DID**, and the site does the same thing with either — signs a Trust
+    /// Task and sends it. Which one it is decides only the carrier.
+    ///
+    /// Carried here rather than assumed, because a room's identifier deliberately does not
+    /// name its host: a room may be served by several, and one that named its host could
+    /// never move. So somebody has to say, and for a listed room that is the catalogue.
+    host: String,
     /// What this room grants a member. Shown before joining, because it is the difference
     /// between the two rooms and the whole of what the demo is about.
     grants: Vec<String>,
@@ -162,13 +181,16 @@ struct CatalogueEntry {
     members: usize,
 }
 
-async fn catalogue(State(rooms): State<Rooms>) -> Json<Vec<CatalogueEntry>> {
+async fn catalogue(State(demo): State<Rooms>) -> Json<Vec<CatalogueEntry>> {
+    let host = demo.member_host.clone();
+    let rooms = demo;
     let rooms = rooms.rooms.lock().await;
     Json(
         rooms
             .values()
             .map(|r| CatalogueEntry {
                 room_id: r.id.clone(),
+                host: host.clone(),
                 grants: r.member_actions.iter().map(|a| (*a).to_string()).collect(),
                 room_did: r.identity.did.clone(),
                 label: r.label.clone(),
@@ -471,6 +493,9 @@ async fn register_with_host(
 #[tokio::main]
 async fn main() {
     let host_url = std::env::var("ROOM_HOST_URL").unwrap_or_else(|_| "http://127.0.0.1:8300".into());
+    // What members are told. The host's DID when there is one — `room-host --mediator-did`
+    // prints it at startup — and its URL otherwise.
+    let member_host = std::env::var("ROOM_HOST_DID").unwrap_or_else(|_| host_url.clone());
 
     // A mediator to advertise, if there is one. Rooms become `did:peer:2` and carry a
     // `DIDCommMessaging` service naming it; without one they stay `did:key` and can only be
@@ -560,9 +585,19 @@ async fn main() {
             },
         );
     }
+    match member_host.strip_prefix("did:") {
+        Some(_) => println!("members will reach the host at {member_host}"),
+        None => println!(
+            "members will reach the host at {member_host} over HTTP — set ROOM_HOST_DID to \
+             the DID `room-host --mediator-did` prints, and they reach it through the \
+             mediator instead"
+        ),
+    }
+
     let rooms: Rooms = Arc::new(Demo {
         owner,
         host_url,
+        member_host,
         rooms: Mutex::new(rooms),
     });
 
