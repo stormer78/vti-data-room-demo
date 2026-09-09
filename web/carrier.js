@@ -186,11 +186,24 @@ export class MediatorLink {
     return this.#holder.identity.did;
   }
 
+  /// Whether the socket underneath is still live.
+  ///
+  /// Checked before a cached link is handed back. Without it a dropped socket is invisible
+  /// until the next request times out, and every request after that times out too — the page
+  /// looks hung rather than disconnected, and reconnecting is the one thing it will not try.
+  get isOpen() {
+    return this.#connection.isOpen;
+  }
+
   /// Open a link to `mediatorDid`, seeded with `firstPeer`'s keys.
   ///
   /// The session resolves any *other* correspondent's keys on demand, so one seed is enough —
   /// which is what makes this a link to a mediator rather than to a party.
-  static async open(mediatorDid, holder, firstPeer) {
+  ///
+  /// `onDropped` fires when the socket goes away on its own, as against being closed here.
+  /// The caller uses it to forget this link, so the next request opens a fresh one instead of
+  /// waiting on a socket nobody is listening to.
+  static async open(mediatorDid, holder, firstPeer, onDropped) {
     const connection = await connectMediatorSession({
       holder: holder.identity,
       mediatorDid,
@@ -198,6 +211,7 @@ export class MediatorLink {
       // parameter is "whose keys should inbound replies unpack against"; here that is
       // whichever party we are about to talk to.
       vtaDid: firstPeer,
+      ...(onDropped ? { onClose: onDropped } : {}),
     });
     const link = new MediatorLink(connection, holder, mediatorDid);
     link.#peers.set(firstPeer, connection.vta);
@@ -371,8 +385,27 @@ const links = new Map();
 export async function linkTo(peerDid, holder) {
   const a = advertised(peerDid);
   if (!a) return null;
+
+  // A cached link is only worth reusing while its socket is up. A dropped one answers nothing
+  // and cannot say so, so every request on it waits out its timeout — the page looks hung
+  // rather than disconnected. Two checks rather than one: `onClose` catches a drop the moment
+  // it happens, and `isOpen` catches the case where it happened before this page was looking.
+  const cached = links.get(a.mediator);
+  if (cached && !cached.isOpen) {
+    links.delete(a.mediator);
+    cached.close();
+  }
+
   if (!links.has(a.mediator)) {
-    links.set(a.mediator, await MediatorLink.open(a.mediator, holder, peerDid));
+    links.set(
+      a.mediator,
+      await MediatorLink.open(a.mediator, holder, peerDid, () => {
+        // Forget it, but do not reconnect here: reconnecting on a drop nobody asked about
+        // would hold a socket open for a page that may never ask again. The next request
+        // opens one.
+        links.delete(a.mediator);
+      }),
+    );
   }
   return { link: links.get(a.mediator), carrier: preferredCarrier(a), advertised: a };
 }
