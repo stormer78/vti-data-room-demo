@@ -225,8 +225,15 @@ that quietly behaved like `attributed` would misrepresent it.
 | | |
 |---|---|
 | `web/vendor/vti_rooms*` | built from `vti-rooms-wasm` — see below |
-| `web/vendor/didcomm.js` | `@openvtc/pnm-core` + `@openvtc/vti-didcomm-js`, bundled |
+| `web/vendor/didcomm.js` | `@openvtc/pnm-core`, `@openvtc/vti-didcomm-js`, `@openvtc/vti-tsp-js`, `@noble/curves`, bundled |
 | `sample-room/` | `vti-rooms` with the `mls` feature, native |
+
+Both files under `web/vendor/` are **build artifacts, not source** — checked in so the site
+stays static files with nothing to install before opening it. Rebuild instructions are below,
+and neither is edited by hand. They carry the licences of what they were built from:
+Apache-2.0 for the OpenVTC crates and packages, MIT for `@noble/curves`.
+
+This repository is Apache-2.0, matching the stack it demonstrates.
 
 Rebuild the wasm after changing `vti-rooms-wasm`:
 
