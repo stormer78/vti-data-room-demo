@@ -295,9 +295,10 @@ export class RoomMember {
      * @param {Uint8Array} welcome
      * @param {string} invitation
      * @param {string} spent
+     * @param {Uint8Array | null} [issuer_key]
      * @returns {RoomMember}
      */
-    static join(room_id, minted, welcome, invitation, spent) {
+    static join(room_id, minted, welcome, invitation, spent, issuer_key) {
         try {
             const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
             const ptr0 = passStringToWasm0(room_id, wasm.__wbindgen_export3, wasm.__wbindgen_export4);
@@ -310,7 +311,9 @@ export class RoomMember {
             const len3 = WASM_VECTOR_LEN;
             const ptr4 = passStringToWasm0(spent, wasm.__wbindgen_export3, wasm.__wbindgen_export4);
             const len4 = WASM_VECTOR_LEN;
-            wasm.roommember_join(retptr, ptr0, len0, ptr1, len1, ptr2, len2, ptr3, len3, ptr4, len4);
+            var ptr5 = isLikeNone(issuer_key) ? 0 : passArray8ToWasm0(issuer_key, wasm.__wbindgen_export3);
+            var len5 = WASM_VECTOR_LEN;
+            wasm.roommember_join(retptr, ptr0, len0, ptr1, len1, ptr2, len2, ptr3, len3, ptr4, len4, ptr5, len5);
             var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
             var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
             var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
@@ -465,11 +468,12 @@ if (Symbol.dispose) RoomMember.prototype[Symbol.dispose] = RoomMember.prototype.
  * @param {string} room_id
  * @param {string} invitation
  * @param {string} spent
+ * @param {Uint8Array | null} [issuer_key]
  * @returns {string}
  */
-export function mintKeyPackage(member_did, room_id, invitation, spent) {
-    let deferred6_0;
-    let deferred6_1;
+export function mintKeyPackage(member_did, room_id, invitation, spent, issuer_key) {
+    let deferred7_0;
+    let deferred7_1;
     try {
         const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
         const ptr0 = passStringToWasm0(member_did, wasm.__wbindgen_export3, wasm.__wbindgen_export4);
@@ -480,23 +484,25 @@ export function mintKeyPackage(member_did, room_id, invitation, spent) {
         const len2 = WASM_VECTOR_LEN;
         const ptr3 = passStringToWasm0(spent, wasm.__wbindgen_export3, wasm.__wbindgen_export4);
         const len3 = WASM_VECTOR_LEN;
-        wasm.mintKeyPackage(retptr, ptr0, len0, ptr1, len1, ptr2, len2, ptr3, len3);
+        var ptr4 = isLikeNone(issuer_key) ? 0 : passArray8ToWasm0(issuer_key, wasm.__wbindgen_export3);
+        var len4 = WASM_VECTOR_LEN;
+        wasm.mintKeyPackage(retptr, ptr0, len0, ptr1, len1, ptr2, len2, ptr3, len3, ptr4, len4);
         var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
         var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
         var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
         var r3 = getDataViewMemory0().getInt32(retptr + 4 * 3, true);
-        var ptr5 = r0;
-        var len5 = r1;
+        var ptr6 = r0;
+        var len6 = r1;
         if (r3) {
-            ptr5 = 0; len5 = 0;
+            ptr6 = 0; len6 = 0;
             throw takeObject(r2);
         }
-        deferred6_0 = ptr5;
-        deferred6_1 = len5;
-        return getStringFromWasm0(ptr5, len5);
+        deferred7_0 = ptr6;
+        deferred7_1 = len6;
+        return getStringFromWasm0(ptr6, len6);
     } finally {
         wasm.__wbindgen_add_to_stack_pointer(16);
-        wasm.__wbindgen_export2(deferred6_0, deferred6_1, 1);
+        wasm.__wbindgen_export2(deferred7_0, deferred7_1, 1);
     }
 }
 
@@ -509,11 +515,12 @@ export function mintKeyPackage(member_did, room_id, invitation, spent) {
  * @param {string} room_id
  * @param {string} member_did
  * @param {string} spent
+ * @param {Uint8Array | null} [issuer_key]
  * @returns {string}
  */
-export function verifyInvitation(invitation, room_id, member_did, spent) {
-    let deferred6_0;
-    let deferred6_1;
+export function verifyInvitation(invitation, room_id, member_did, spent, issuer_key) {
+    let deferred7_0;
+    let deferred7_1;
     try {
         const retptr = wasm.__wbindgen_add_to_stack_pointer(-16);
         const ptr0 = passStringToWasm0(invitation, wasm.__wbindgen_export3, wasm.__wbindgen_export4);
@@ -524,23 +531,25 @@ export function verifyInvitation(invitation, room_id, member_did, spent) {
         const len2 = WASM_VECTOR_LEN;
         const ptr3 = passStringToWasm0(spent, wasm.__wbindgen_export3, wasm.__wbindgen_export4);
         const len3 = WASM_VECTOR_LEN;
-        wasm.verifyInvitation(retptr, ptr0, len0, ptr1, len1, ptr2, len2, ptr3, len3);
+        var ptr4 = isLikeNone(issuer_key) ? 0 : passArray8ToWasm0(issuer_key, wasm.__wbindgen_export3);
+        var len4 = WASM_VECTOR_LEN;
+        wasm.verifyInvitation(retptr, ptr0, len0, ptr1, len1, ptr2, len2, ptr3, len3, ptr4, len4);
         var r0 = getDataViewMemory0().getInt32(retptr + 4 * 0, true);
         var r1 = getDataViewMemory0().getInt32(retptr + 4 * 1, true);
         var r2 = getDataViewMemory0().getInt32(retptr + 4 * 2, true);
         var r3 = getDataViewMemory0().getInt32(retptr + 4 * 3, true);
-        var ptr5 = r0;
-        var len5 = r1;
+        var ptr6 = r0;
+        var len6 = r1;
         if (r3) {
-            ptr5 = 0; len5 = 0;
+            ptr6 = 0; len6 = 0;
             throw takeObject(r2);
         }
-        deferred6_0 = ptr5;
-        deferred6_1 = len5;
-        return getStringFromWasm0(ptr5, len5);
+        deferred7_0 = ptr6;
+        deferred7_1 = len6;
+        return getStringFromWasm0(ptr6, len6);
     } finally {
         wasm.__wbindgen_add_to_stack_pointer(16);
-        wasm.__wbindgen_export2(deferred6_0, deferred6_1, 1);
+        wasm.__wbindgen_export2(deferred7_0, deferred7_1, 1);
     }
 }
 function __wbg_get_imports() {

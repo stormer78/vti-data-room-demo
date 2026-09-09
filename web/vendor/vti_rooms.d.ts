@@ -62,7 +62,7 @@ export class RoomMember {
     /**
      * See [`RoomMember::join`].
      */
-    static join(room_id: string, minted: string, welcome: Uint8Array, invitation: string, spent: string): RoomMember;
+    static join(room_id: string, minted: string, welcome: Uint8Array, invitation: string, spent: string, issuer_key?: Uint8Array | null): RoomMember;
     /**
      * See [`RoomMember::open_record`].
      */
@@ -92,7 +92,7 @@ export class RoomMember {
 /**
  * See [`mint_key_package`].
  */
-export function mintKeyPackage(member_did: string, room_id: string, invitation: string, spent: string): string;
+export function mintKeyPackage(member_did: string, room_id: string, invitation: string, spent: string, issuer_key?: Uint8Array | null): string;
 
 /**
  * Run the five invitation checks and return the credential id to record as spent.
@@ -100,7 +100,7 @@ export function mintKeyPackage(member_did: string, room_id: string, invitation: 
  * Exposed separately from [`mint_key_package`] so a surface can *show* the checks — which
  * is most of what a person needs to understand about a room they are being let into.
  */
-export function verifyInvitation(invitation: string, room_id: string, member_did: string, spent: string): string;
+export function verifyInvitation(invitation: string, room_id: string, member_did: string, spent: string, issuer_key?: Uint8Array | null): string;
 
 export type InitInput = RequestInfo | URL | Response | BufferSource | WebAssembly.Module;
 
@@ -114,18 +114,18 @@ export interface InitOutput {
     readonly identity_restore: (a: number, b: number, c: number) => void;
     readonly identity_signDocument: (a: number, b: number, c: number, d: number) => void;
     readonly identity_snapshot: (a: number, b: number) => void;
-    readonly mintKeyPackage: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => void;
+    readonly mintKeyPackage: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number) => void;
     readonly roommember_addLinks: (a: number, b: number, c: number, d: number) => void;
     readonly roommember_applyCommit: (a: number, b: number, c: number, d: number) => void;
     readonly roommember_earliestReadableEpoch: (a: number, b: number) => void;
     readonly roommember_epoch: (a: number) => number;
-    readonly roommember_join: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number) => void;
+    readonly roommember_join: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number, l: number, m: number) => void;
     readonly roommember_openRecord: (a: number, b: number, c: number, d: number, e: bigint, f: number, g: number) => void;
     readonly roommember_restore: (a: number, b: number, c: number) => void;
     readonly roommember_roomId: (a: number, b: number) => void;
     readonly roommember_sealRecord: (a: number, b: number, c: number, d: number, e: bigint, f: number, g: number) => void;
     readonly roommember_snapshot: (a: number, b: number) => void;
-    readonly verifyInvitation: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number) => void;
+    readonly verifyInvitation: (a: number, b: number, c: number, d: number, e: number, f: number, g: number, h: number, i: number, j: number, k: number) => void;
     readonly __wbindgen_export: (a: number) => void;
     readonly __wbindgen_add_to_stack_pointer: (a: number) => number;
     readonly __wbindgen_export2: (a: number, b: number, c: number) => void;

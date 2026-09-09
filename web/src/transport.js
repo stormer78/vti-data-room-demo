@@ -27,6 +27,10 @@ export {
   resolveKeyAgreement,
   packAuthcryptJson,
   wrapForward,
+  // Any method the stack knows — `did:key` and `did:peer` by computation, `did:webvh` by
+  // fetching and verifying its log. Which is what lets this site front a production room
+  // rather than only the ones the sample mints.
+  resolveDidDocument,
 } from "@openvtc/pnm-core/didcomm";
 export { didPeer, multibase } from "@openvtc/vti-didcomm-js";
 // TSP — the higher-preference of the two carriers, and the one the mediator sniffs off the

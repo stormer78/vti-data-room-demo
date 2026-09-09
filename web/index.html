@@ -177,7 +177,7 @@
 <script type="module">
 import init, { mintKeyPackage, verifyInvitation, Identity, RoomMember } from "./vendor/vti_rooms.js";
 import { requestAdmission, requestCommits, requestInvitation } from "./admission.js";
-import { advertised, closeLinks, linkTo, mintTransportIdentity } from "./carrier.js";
+import { advertised, closeLinks, issuerKey, linkTo, mintTransportIdentity } from "./carrier.js";
 
 // The module is ~1.9 MB and every handler below depends on it, so the buttons stay
 // disabled until it is ready. Without this the page looks finished before it is, and a
@@ -391,7 +391,7 @@ async function joinByDid(roomDid) {
 
   const mine = [];
   try {
-    const where = advertised(roomDid);
+    const where = await advertised(roomDid);
     if (!where) {
       log(`${roomDid} advertises no mediator, so there is nowhere to ask to join. A `
         + `did:key room can be verified but not reached — only a method with a service `
@@ -417,11 +417,20 @@ async function joinByDid(roomDid) {
     mine.push("invitation received — from the room, not from this site");
 
     // 2 · Check it before acting on it. The same six clauses, in the same wasm.
-    const credentialId = verifyInvitation(vic, roomDid, me.did, spent());
+    //
+    //     `key` is the room's own signing key, and it is only ever needed for a method that
+    //     does not carry one — a `did:webvh` room, which is what production mints. For a
+    //     `did:key` or a `did:peer` this is null and the gate derives the key itself, so
+    //     nothing this page believes about the room can affect the verdict.
+    // Named `roomSigningKey`, not `key`: this function already uses `key(suffix)` to build
+    // storage keys, and shadowing it made a working join fail with "key is not a function"
+    // several lines later — a long way from the declaration that caused it.
+    const roomSigningKey = await issuerKey(roomDid);
+    const credentialId = verifyInvitation(vic, roomDid, me.did, spent(), roomSigningKey);
     mine.push("invitation verified — issued by this room, to me, signed by its own key, unspent");
 
     // 3 · Mint a KeyPackage, gated on that invitation.
-    const minted = mintKeyPackage(me.did, roomDid, vic, spent());
+    const minted = mintKeyPackage(me.did, roomDid, vic, spent(), roomSigningKey);
     const { keyPackage } = JSON.parse(minted);
     mine.push("key package minted — one per room, never reused");
 
@@ -430,7 +439,7 @@ async function joinByDid(roomDid) {
     const out = await requestAdmission(link, carrier, roomDid, identity, keyPackage, invitation);
 
     // 5 · Accept the Welcome.
-    member = RoomMember.join(roomDid, minted, b64u.dec(out.welcome), vic, spent());
+    member = RoomMember.join(roomDid, minted, b64u.dec(out.welcome), vic, spent(), roomSigningKey);
     markSpent(credentialId);
     currentRoomDid = roomDid;
     mine.push("welcome accepted in this tab — the group key never left the owner unsealed");

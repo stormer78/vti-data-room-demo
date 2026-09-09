@@ -34,6 +34,7 @@ import {
   connectMediatorSession,
   createDidPeer2,
   didPeer,
+  resolveDidDocument,
   ed25519,
   x25519,
   multibase,
@@ -65,9 +66,14 @@ const REPLY_TIMEOUT_MS = 30_000;
 ///
 /// `null` when the DID advertises nothing — a `did:key`, which can be verified but not
 /// reached.
-export function advertised(did) {
-  if (!did.startsWith("did:peer:")) return null;
-  const { didDocument } = didPeer.resolve(did);
+export async function advertised(did) {
+  // Any method the stack resolves, not only `did:peer`. That mattered the moment this site
+  // was pointed at anything real: a production room is a `did:webvh`, and so is a
+  // VTC-hosted one, so a `did:peer`-only lookup could reach the sample's rooms and nothing
+  // else. `did:key` and `did:peer` still cost no network — the resolver computes them — and
+  // `did:webvh` fetches and verifies its log, which is why this is async.
+  const didDocument = await resolveDidDocument(did).catch(() => null);
+  if (!didDocument) return null;
 
   let found = null;
   for (const service of didDocument.service ?? []) {
@@ -149,8 +155,8 @@ export function mintTransportIdentity() {
 /// TSP verifies the outer signature against this; DIDComm verifies its envelope against the
 /// key-agreement key. Two keys doing the same job for two carriers, both recoverable from the
 /// DID without a network.
-function verificationKey(did) {
-  const { didDocument } = didPeer.resolve(did);
+async function verificationKey(did) {
+  const didDocument = await resolveDidDocument(did);
   for (const vm of didDocument.verificationMethod ?? []) {
     if (!vm.publicKeyMultibase) continue;
     const { codec, key } = multibase.decodeMultikey(vm.publicKeyMultibase);
@@ -327,7 +333,7 @@ export class MediatorLink {
     // to arrive would be handed to this waiter, and a mediator sends frames of its own. Only
     // this layer can tell them apart because only it holds the keys, so the predicate unpacks
     // and keeps what it decoded rather than making the caller unpack again.
-    const peerSigning = verificationKey(to);
+    const peerSigning = await verificationKey(to);
     let decoded = null;
     const claims = async (frame) => {
       try {
@@ -383,7 +389,7 @@ const links = new Map();
 /// Returns `null` when the party advertises nowhere — a `did:key`, which can be verified but
 /// not reached.
 export async function linkTo(peerDid, holder) {
-  const a = advertised(peerDid);
+  const a = await advertised(peerDid);
   if (!a) return null;
 
   // A cached link is only worth reusing while its socket is up. A dropped one answers nothing
@@ -415,4 +421,20 @@ export async function linkTo(peerDid, holder) {
 export function closeLinks() {
   for (const link of links.values()) link.close();
   links.clear();
+}
+
+/// The Ed25519 key a room signs with, for the invitation gate in wasm.
+///
+/// **Why this crosses the boundary at all.** For a `did:key` or a `did:peer` the gate derives
+/// the key from the identifier and ignores whatever is passed — the identifier *is* the key,
+/// and taking the caller's word for it would give up the one check wasm can make entirely
+/// alone. For a `did:webvh` there is nothing in the identifier to derive from: resolving one
+/// means fetching a log over HTTPS and verifying its history, which is I/O, and wasm has
+/// none. So this page resolves it, and the resolution is the trust.
+///
+/// `null` when the method carries its own key, so the gate takes the lexical path and this
+/// page's opinion never enters into it.
+export async function issuerKey(did) {
+  if (did.startsWith("did:key:") || did.startsWith("did:peer:")) return null;
+  return await verificationKey(did);
 }
