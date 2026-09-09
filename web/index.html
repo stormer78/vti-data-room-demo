@@ -683,14 +683,16 @@ async function loadRecords() {
     for (const meta of listed) {
       const got = await hostTask(
         "https://trusttasks.org/spec/rooms/records/get/0.1", "read", { key: meta.key });
-      // A stored record comes back FLAT — `sealed` is the ciphertext, with `nonce` and
-      // `epoch` beside it — while `put` takes the same three as one `SealedContent`
-      // object. Reassembled here rather than at the call site, because opening needs all
-      // three together and the epoch is the one that decides which key is used.
-      recs.push({
-        ...meta, ...got,
-        sealed: { ciphertext: got.sealed, nonce: got.nonce, epoch: got.epoch },
-      });
+      // `sealed` is a `SealedContent` — ciphertext, nonce and epoch together — which is what
+      // the schema always specified and what a host now sends.
+      //
+      // This used to reassemble it from flat members, because that is what hosts actually
+      // sent: a read was answered by serialising the *storage* record, where `sealed` is a
+      // bare base64 string. VTI #1368 gave the task a response type, and the workaround
+      // became the bug. Worth remembering as the general case: code written against a defect
+      // breaks when the defect is fixed, and it breaks quietly — here, as a record that
+      // stores and lists but will not open.
+      recs.push({ ...meta, ...got });
     }
   } catch (e) { log("the host refused the read: " + e.message); return; }
   $("records-panel").classList.remove("hide");

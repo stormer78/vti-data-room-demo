@@ -310,12 +310,16 @@ async fn records(
     // needs all three together, and the epoch is the one that decides which key is used, so
     // they are reassembled here. The browser member does exactly this, and for the same
     // reason; the asymmetry is the host's wire form, not either client's choice.
-    let stored: vti_rooms::wire::SealedContent = serde_json::from_value(serde_json::json!({
-        "ciphertext": got["sealed"],
-        "nonce": got["nonce"],
-        "epoch": got["epoch"],
-    }))
-    .map_err(|e| format!("the host's record: {e}"))?;
+    // `sealed` is a `SealedContent` — the shape the schema always specified.
+    //
+    // This used to reassemble it from flat `sealed`/`nonce`/`epoch` members, because that is
+    // what a host actually sent: both hosts answered a read by serialising the *storage*
+    // record, where `sealed` is a bare base64 string. #1368 gave the task a response type and
+    // the workaround became the bug — a client written against the defect breaks the moment
+    // the defect is fixed, which is the argument for fixing rather than accommodating.
+    let stored: vti_rooms::wire::SealedContent = serde_json::from_value(got["sealed"].clone())
+        .map_err(|e| format!("the host's record: {e}"))?;
+
     let opened = room
         .open_record(&key, next_version, &stored)
         .map_err(|e| format!("open the record: {e}"))?;
