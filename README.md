@@ -5,7 +5,8 @@ A single site where somebody with no wallet, no agent and no account can mint th
 stores but cannot read.
 
 Design note: `verifiable-trust-infrastructure`,
-`docs/05-design-notes/data-rooms-demo-site.md`.
+`docs/05-design-notes/data-rooms-demo-site.md` — §10 is what building this changed, including
+the two predictions that did not survive it.
 
 ## Two things, and the boundary between them is the point
 
