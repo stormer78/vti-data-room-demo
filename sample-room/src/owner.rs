@@ -129,7 +129,7 @@ impl RoomIdentity {
             self.did.clone(),
             actions.iter().map(|a| (*a).to_string()).collect(),
             now,
-            Some(now + Duration::days(30)),
+            now + Duration::days(30),
         )
         .map_err(|e| format!("build the authority credential: {e}"))?
         .with_id(&format!("urn:uuid:{}", uuid::Uuid::new_v4()));
@@ -164,9 +164,9 @@ impl RoomIdentity {
     /// Mint an authority presentation for one action, as this identity.
     ///
     /// The same act the browser performs, and the same shape: strings on the wire, leaf
-    /// first, narrowed to one action, and bound to the presenter — `audience` is compared
-    /// against whoever presents, so binding it to anyone else refuses the legitimate
-    /// holder and protects nobody.
+    /// first, narrowed to one action. Binding to the presenter is the library's rule since
+    /// dtg-credentials 0.8 — `verify_chain` requires the leaf to grant to whoever presents
+    /// it — so there is no longer a field to fill in, and no way to fill it in wrongly.
     pub async fn present(
         &self,
         vac: &str,
@@ -181,8 +181,7 @@ impl RoomIdentity {
                 self.did.clone(),
                 vec![action.to_string()],
                 now,
-                Some(now + Duration::hours(4)),
-                Some(self.did.clone()),
+                now + Duration::hours(4),
             )
             .map_err(|e| format!("narrow this authority to `{action}`: {e}"))?;
         self.sign(&mut leaf).await?;
@@ -246,8 +245,7 @@ mod tests {
                 member.to_string(),
                 vec!["read".into()],
                 now,
-                Some(now + Duration::hours(4)),
-                Some(member.to_string()),
+                now + Duration::hours(4),
             )
             .expect("a member may narrow what the room granted");
         assert!(
@@ -255,8 +253,7 @@ mod tests {
                 member.to_string(),
                 vec!["curate".into()],
                 now,
-                Some(now + Duration::hours(4)),
-                None,
+                now + Duration::hours(4),
             )
             .is_err(),
             "attenuation must refuse to widen: `curate` was never granted"

@@ -24,7 +24,7 @@ base64 = "0.23"
 # 0.6, matching the VTI workspace the host is built from. 0.7 changed how an
 # authority chain links (parent id → parent digest), so a 0.7 issuer and a 0.6
 # verifier cannot interoperate.
-dtg-credentials = "0.6"
+dtg-credentials = "0.9.1"
 affinidi-secrets-resolver = "0.5"
 affinidi-data-integrity = "0.7"
 reqwest = { version = "0.13", features = ["json"] }
