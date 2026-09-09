@@ -1,0 +1,315 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Data rooms — demo</title>
+<style>
+  :root {
+    --bg: #fbfaf8; --panel: #fff; --ink: #17181a; --muted: #6a6d73;
+    --line: #e3e0da; --accent: #3a5f9e; --seal: #7a5230; --ok: #2f6b4f;
+    --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#141517; --panel:#1c1e21; --ink:#e9e7e3; --muted:#9a9da3;
+            --line:#2c2f33; --accent:#8fb0e6; --seal:#c9a37a; --ok:#7fc4a1; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink);
+         font:15px/1.55 ui-sans-serif, system-ui, -apple-system, sans-serif; }
+  main { max-width: 62rem; margin: 0 auto; padding: 2rem 1.25rem 5rem; }
+  h1 { font-size:1.5rem; margin:0 0 .25rem; letter-spacing:-.01em; }
+  h2 { font-size:1rem; margin:0 0 .75rem; letter-spacing:.02em;
+       text-transform:uppercase; color:var(--muted); font-weight:600; }
+  p { margin:.5rem 0; }
+  .sub { color:var(--muted); margin-bottom:2rem; }
+  section { background:var(--panel); border:1px solid var(--line); border-radius:10px;
+            padding:1.25rem; margin-bottom:1.25rem; }
+  button { font:inherit; padding:.5rem .9rem; border-radius:7px; cursor:pointer;
+           border:1px solid var(--accent); background:var(--accent); color:#fff; }
+  button.ghost { background:transparent; color:var(--accent); }
+  button:disabled { opacity:.45; cursor:not-allowed; }
+  input, textarea { font:inherit; padding:.5rem .6rem; border-radius:7px;
+                    border:1px solid var(--line); background:var(--bg); color:var(--ink); width:100%; }
+  textarea { font-family:var(--mono); font-size:13px; min-height:5rem; }
+  code, .mono { font-family:var(--mono); font-size:12.5px; word-break:break-all; }
+  .warn { border-left:3px solid var(--seal); padding-left:.9rem; color:var(--muted); }
+  .row { display:flex; gap:.6rem; flex-wrap:wrap; align-items:center; }
+  .grid { display:grid; gap:.75rem; grid-template-columns:repeat(auto-fill,minmax(15rem,1fr)); }
+  .card { border:1px solid var(--line); border-radius:8px; padding:.85rem; }
+  .steps { list-style:none; padding:0; margin:.75rem 0 0; }
+  .steps li { padding:.3rem 0 .3rem 1.4rem; position:relative; color:var(--muted); }
+  .steps li::before { content:"✓"; position:absolute; left:0; color:var(--ok); }
+  .epochs { display:flex; gap:1.5rem; margin-top:.5rem; }
+  .epochs div { font-size:1.6rem; font-weight:600; line-height:1; }
+  .epochs span { display:block; font-size:.75rem; color:var(--muted);
+                 text-transform:uppercase; letter-spacing:.04em; margin-top:.3rem; font-weight:400; }
+  .cipher { background:var(--bg); border:1px dashed var(--line); border-radius:6px;
+            padding:.6rem; margin-top:.5rem; overflow-x:auto; }
+  .hide { display:none; }
+  #log { color:var(--muted); font-size:13px; }
+</style>
+
+<main>
+  <h1>Data rooms</h1>
+  <p class="sub">Mint your own key in this tab, join a room, and read and write records
+    the host stores but cannot read.</p>
+
+  <section id="identity-panel">
+    <h2>1 · Who you are</h2>
+    <p id="did-line" class="muted">No identity in this browser yet.</p>
+    <div class="row">
+      <button id="mint">Mint a did:key</button>
+      <button id="forget" class="ghost hide">Forget it</button>
+    </div>
+    <p class="warn" style="margin-top:1rem">
+      This key lives in this browser and nowhere else. Clearing site data destroys it, and
+      with it every room you joined — nobody can re-issue it for you. That is the point,
+      and it is also the risk.
+    </p>
+  </section>
+
+  <section id="rooms-panel" class="hide">
+    <h2>2 · Rooms</h2>
+    <div id="rooms" class="grid"></div>
+  </section>
+
+  <section id="join-panel" class="hide">
+    <h2>3 · How you got in</h2>
+    <p class="sub" style="margin:0">Admission is five acts by the room's owner. They are
+      shown rather than hidden behind a spinner, because the governance <em>is</em> the
+      product.</p>
+    <ul id="steps" class="steps"></ul>
+    <div class="epochs">
+      <div id="epoch">–<span>your epoch</span></div>
+      <div id="earliest">–<span>earliest readable</span></div>
+    </div>
+    <p class="sub" style="margin-top:.75rem">Two numbers, because they are different
+      repairs. Behind the room's epoch means a commit has not been delivered. Earliest
+      equal to current means the key chain has not arrived — you can read from where you
+      joined, not before.</p>
+  </section>
+
+  <section id="records-panel" class="hide">
+    <h2>4 · Records</h2>
+    <div class="row" style="margin-bottom:.75rem">
+      <input id="rec-key" placeholder="record key" style="max-width:14rem">
+      <button id="write">Seal &amp; write</button>
+    </div>
+    <textarea id="rec-body" placeholder="Write something. It is sealed in this tab before it leaves."></textarea>
+    <div id="records" style="margin-top:1rem"></div>
+  </section>
+
+  <section>
+    <h2>What is real here, and what is not</h2>
+    <p><strong>Real:</strong> your key, the MLS group, the sealing. The broker stores
+      ciphertext and has no way to read it — not a policy, an inability.</p>
+    <p><strong>Not yet:</strong> the credentials. A real room admits you with credentials
+      the <em>room</em> issues, and a real host authorises every operation against a
+      presentation minted from them. This demo admits anyone who asks.</p>
+    <p id="log"></p>
+  </section>
+</main>
+
+<script type="module">
+import init, { mintKeyPackage, RoomMember } from "./vendor/vti_rooms.js";
+
+await init();
+
+const $ = (id) => document.getElementById(id);
+const log = (m) => { $("log").textContent = m; };
+
+// ── did:key ────────────────────────────────────────────────────────────────
+// Ed25519 public key, multicodec-prefixed (0xed 0x01) and base58btc'd with a
+// `z`. Lexical and self-certifying: nothing has to resolve it, which is why a
+// tab can mint one and be somebody immediately.
+const B58 = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+function base58(bytes) {
+  let digits = [0];
+  for (const b of bytes) {
+    let carry = b;
+    for (let i = 0; i < digits.length; i++) {
+      carry += digits[i] << 8;
+      digits[i] = carry % 58;
+      carry = (carry / 58) | 0;
+    }
+    while (carry) { digits.push(carry % 58); carry = (carry / 58) | 0; }
+  }
+  let out = "";
+  for (const b of bytes) { if (b === 0) out += "1"; else break; }
+  for (let i = digits.length - 1; i >= 0; i--) out += B58[digits[i]];
+  return out;
+}
+const b64u = {
+  enc: (b) => btoa(String.fromCharCode(...b)).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,""),
+  dec: (s) => Uint8Array.from(atob(s.replace(/-/g,"+").replace(/_/g,"/")), c => c.charCodeAt(0)),
+};
+
+// ── storage ────────────────────────────────────────────────────────────────
+// localStorage, deliberately: this is a demo and the snapshot is small. A real
+// wallet keeps it in IndexedDB behind a non-extractable key. Both are per-origin
+// and per-browser; neither reaches us.
+const S = {
+  get: (k) => { try { return JSON.parse(localStorage.getItem(k) ?? "null"); } catch { return null; } },
+  set: (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} },
+  del: (k) => { try { localStorage.removeItem(k); } catch {} },
+};
+
+let me = S.get("dr:identity");     // { did, privateKeyJwk }
+let member = null;                 // a live RoomMember
+let currentRoom = null;
+
+async function mint() {
+  const kp = await crypto.subtle.generateKey({ name: "Ed25519" }, true, ["sign", "verify"]);
+  const raw = new Uint8Array(await crypto.subtle.exportKey("raw", kp.publicKey));
+  const mc = new Uint8Array(raw.length + 2);
+  mc.set([0xed, 0x01]); mc.set(raw, 2);
+  me = {
+    did: "did:key:z" + base58(mc),
+    privateKeyJwk: await crypto.subtle.exportKey("jwk", kp.privateKey),
+  };
+  S.set("dr:identity", me);
+  renderIdentity();
+  await loadRooms();
+}
+
+function renderIdentity() {
+  if (!me) {
+    $("did-line").textContent = "No identity in this browser yet.";
+    $("mint").classList.remove("hide"); $("forget").classList.add("hide");
+    $("rooms-panel").classList.add("hide");
+    return;
+  }
+  $("did-line").innerHTML = `You are <code>${me.did}</code>`;
+  $("mint").classList.add("hide"); $("forget").classList.remove("hide");
+  $("rooms-panel").classList.remove("hide");
+}
+
+// ── rooms ──────────────────────────────────────────────────────────────────
+async function loadRooms() {
+  const rooms = await (await fetch("/api/rooms")).json();
+  $("rooms").innerHTML = "";
+  for (const r of rooms) {
+    const held = S.get("dr:room:" + r.roomId);
+    const el = document.createElement("div");
+    el.className = "card";
+    el.innerHTML = `<strong>${r.label}</strong>
+      <p class="mono" style="color:var(--muted);margin:.35rem 0">${r.roomId}</p>
+      <p style="color:var(--muted);font-size:13px">epoch ${r.epoch} · ${r.members} member(s)</p>`;
+    const b = document.createElement("button");
+    b.className = held ? "ghost" : "";
+    b.textContent = held ? "Open" : "Ask to join";
+    b.onclick = () => held ? openRoom(r.roomId) : join(r.roomId);
+    el.append(b);
+    $("rooms").append(el);
+  }
+}
+
+async function join(roomId) {
+  log("minting a key package for this room…");
+  // One per room, never reused: a KeyPackage is a stable public identifier, so
+  // offering the same one to two rooms tells anyone who sees both that one party
+  // is in both.
+  const minted = mintKeyPackage(me.did);
+  const { keyPackage } = JSON.parse(minted);
+
+  const res = await fetch(`/api/rooms/${roomId}/join`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ did: me.did, keyPackage }),
+  });
+  if (!res.ok) { log("refused: " + await res.text()); return; }
+  const out = await res.json();
+
+  member = RoomMember.join(roomId, minted, b64u.dec(out.welcome));
+  currentRoom = roomId;
+  S.set("dr:room:" + roomId, member.snapshot());
+
+  $("steps").innerHTML = out.steps.map(s => `<li>${s}</li>`).join("")
+    + `<li>welcome accepted in this tab — the group key never left the owner unsealed</li>`;
+  $("join-panel").classList.remove("hide");
+  showEpochs();
+  await loadRecords();
+  await loadRooms();
+  log("");
+}
+
+function openRoom(roomId) {
+  member = RoomMember.restore(S.get("dr:room:" + roomId));
+  currentRoom = roomId;
+  $("steps").innerHTML = "<li>restored from this browser — no key left it</li>";
+  $("join-panel").classList.remove("hide");
+  showEpochs();
+  loadRecords();
+}
+
+function showEpochs() {
+  $("epoch").firstChild.textContent = member.epoch;
+  $("earliest").firstChild.textContent = member.earliestReadableEpoch();
+}
+
+// ── records ────────────────────────────────────────────────────────────────
+async function loadRecords() {
+  const recs = await (await fetch(`/api/rooms/${currentRoom}/records`)).json();
+  $("records-panel").classList.remove("hide");
+  const box = $("records");
+  box.innerHTML = "";
+  if (!recs.length) { box.innerHTML = `<p style="color:var(--muted)">Nothing written yet.</p>`; return; }
+  for (const r of recs) {
+    const el = document.createElement("div");
+    el.className = "card";
+    el.style.marginBottom = ".6rem";
+    let plaintext;
+    try {
+      plaintext = new TextDecoder().decode(
+        member.openRecord(r.key, BigInt(r.version), JSON.stringify(r.sealed)));
+    } catch (e) {
+      plaintext = null;
+      var why = String(e.message ?? e);
+    }
+    el.innerHTML = `<div class="row" style="justify-content:space-between">
+        <strong>${r.key}</strong>
+        <span style="color:var(--muted);font-size:12px">v${r.version} · epoch ${r.sealed.epoch}</span>
+      </div>
+      <p style="margin:.5rem 0">${plaintext !== null
+        ? plaintext.replace(/[<>&]/g, c => ({"<":"&lt;",">":"&gt;","&":"&amp;"}[c]))
+        : `<em style="color:var(--seal)">did not open — ${why}</em>`}</p>
+      <details><summary style="cursor:pointer;color:var(--muted);font-size:13px">what the host has</summary>
+        <div class="cipher mono">${r.sealed.ciphertext}</div></details>`;
+    box.append(el);
+  }
+}
+
+async function write() {
+  const key = $("rec-key").value.trim();
+  const body = $("rec-body").value;
+  if (!key) { log("a record needs a key"); return; }
+
+  // Ask for the version first. It is bound *into* the ciphertext along with the
+  // room, the key and the epoch — seal against the wrong one and the record
+  // stores fine and never opens.
+  const { nextVersion } = await (await fetch(`/api/rooms/${currentRoom}/next-version`)).json();
+  const sealed = member.sealRecord(key, BigInt(nextVersion), new TextEncoder().encode(body));
+
+  const res = await fetch(`/api/rooms/${currentRoom}/records/${encodeURIComponent(key)}`, {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ sealed: JSON.parse(sealed), expectedVersion: nextVersion, author: me.did }),
+  });
+  if (!res.ok) { log("refused: " + await res.text()); return; }
+  $("rec-key").value = ""; $("rec-body").value = "";
+  await loadRecords();
+  log("");
+}
+
+$("mint").onclick = mint;
+$("forget").onclick = () => {
+  if (!confirm("This destroys the key and every room it joined. There is no recovery.")) return;
+  for (const k of Object.keys(localStorage)) if (k.startsWith("dr:")) S.del(k);
+  me = null; member = null;
+  $("join-panel").classList.add("hide"); $("records-panel").classList.add("hide");
+  renderIdentity();
+};
+$("write").onclick = write;
+
+renderIdentity();
+if (me) await loadRooms();
+</script>

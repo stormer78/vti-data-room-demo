@@ -1,0 +1,72 @@
+# Data rooms — demo
+
+A single site where somebody with no wallet, no agent and no account can mint their own
+`did:key` in the browser, be admitted to a data room, and read and write records the host
+stores but cannot read.
+
+Design note: `verifiable-trust-infrastructure`,
+`docs/05-design-notes/data-rooms-demo-site.md`.
+
+## Two things, and the boundary between them is the point
+
+```
+web/           the site — a CLIENT, and nothing else
+sample-room/   optional local infrastructure, so the site has something to point at
+```
+
+**`web/` does not host rooms.** It holds a key, joins rooms, and gives you a way to work
+inside one. A room is addressed, never configured: `{roomDid, host}` off the URL, so the
+site works against a room it has never seen, hosted by a VTC it does not know. That is the
+whole of "one site, any number of rooms", and it only stays true if the site has no
+special path for the room shipped beside it.
+
+**`sample-room/` exists so the demo runs standalone**, and for no other reason. It plays
+the two parts that live elsewhere in a real deployment:
+
+- the **host**, which stores ciphertext it cannot read — in a real deployment a VTC, or
+  the standalone `room-host` binary;
+- the **owner**, who creates the room and admits people — in a real deployment a person
+  with a VTA, using the wallet console or `pnm-cli`.
+
+If the site ever needs to know which of the two it is talking to, the demo has stopped
+demonstrating anything. The interface is the same either way.
+
+## Running it
+
+```
+cd sample-room && DEMO_WEB_DIR=../web cargo run
+# → http://127.0.0.1:8787
+```
+
+## What is real, and what is not
+
+**Real.** The `did:key` is minted in the tab by WebCrypto. The MLS group, record sealing
+and the epoch key chain are `vti-rooms` itself, compiled to `wasm32-unknown-unknown` — the
+same crate the services link, not a re-implementation. The invitation is a signed DTG
+credential and the browser checks all six clauses before it will mint a KeyPackage or
+accept a Welcome. The host holds ciphertext and has no code path that could read it.
+
+**Not yet.** The authority chain. A real host takes two things from a request — the
+presenter, from the document's own `eddsa-jcs-2022` proof, and a chain verified against
+credentials the room issued — and until the browser can mint an authority presentation it
+cannot speak that surface. Until then `sample-room` serves a plain HTTP record API, which
+is the one place this demo is standing in for something rather than being it.
+
+**Deliberately not shown.** The `private` visibility tier. Its subject binding has to be
+proved in zero knowledge and the working group has not settled the profile; a demo tier
+that quietly behaved like `attributed` would misrepresent it.
+
+## Where the pieces come from
+
+| | |
+|---|---|
+| `web/vendor/vti_rooms*` | built from `vti-rooms-wasm` — see below |
+| `sample-room/` | `vti-rooms` with the `mls` feature, native |
+
+Rebuild the wasm after changing `vti-rooms-wasm`:
+
+```
+cargo build -p vti-rooms-wasm --profile wasm-release --target wasm32-unknown-unknown
+wasm-bindgen --target web --out-dir <this>/web/vendor --out-name vti_rooms \
+  target/wasm32-unknown-unknown/wasm-release/vti_rooms_wasm.wasm
+```
