@@ -37,9 +37,79 @@ pub struct RoomIdentity {
     secret: affinidi_secrets_resolver::secrets::Secret,
 }
 
+/// The DIDComm service a room advertises: reach me through this mediator.
+///
+/// `serviceEndpoint.uri` is the mediator's **DID**, not a URL — matching how the built-in
+/// `ai-agent` and `room` did:webvh templates advertise `DIDCommMessaging`. A client reads
+/// the mediator DID from here and dials through it, which is what lets every room on one
+/// mediator share a single connection rather than opening one apiece.
+fn vta_peer_service(mediator_did: &str) -> Vec<affinidi_tdk::dids::PeerService> {
+    use affinidi_tdk::dids::{OneOrMany, PeerService, PeerServiceEndpoint, PeerServiceEndpointLong};
+    vec![PeerService {
+        type_: "DIDCommMessaging".into(),
+        endpoint: PeerServiceEndpoint::Long(OneOrMany::One(PeerServiceEndpointLong {
+            uri: mediator_did.to_string(),
+            accept: vec!["didcomm/v2".into()],
+            routing_keys: vec![],
+        })),
+        id: None,
+    }]
+}
+
 impl RoomIdentity {
-    /// Mint a room's `did:key` and the secret behind it.
-    pub fn mint() -> Result<Self, String> {
+    /// Mint a room's identity.
+    ///
+    /// **`did:peer:2` when a mediator is named, `did:key` otherwise**, and the difference
+    /// is the whole of whether a room can be joined by somebody this site was not told
+    /// about.
+    ///
+    /// A `did:key` is a key and nothing else: it has no service block, so it cannot say
+    /// where its owner is reachable. A member handed only the room's identifier can verify
+    /// everything the room signs and still have no way to *ask to join*. A `did:peer:2`
+    /// carries services inline, so it can advertise the mediator its owner listens on —
+    /// while staying self-certifying, which is what keeps verification lexical on both
+    /// sides (see `vti-rooms-wasm`'s invitation gate and `vta-sdk`'s verifier, which both
+    /// resolve `did:peer` with no I/O).
+    ///
+    /// Production mints `did:webvh` instead, for a reason neither of these has: a room's
+    /// controller must be able to change, and transferring ownership is a controller
+    /// change. `did:peer` encodes its keys in the identifier, so it can never have one.
+    ///
+    /// Not defaulted to a fabricated mediator. A room advertising somewhere nobody listens
+    /// is worse than a room advertising nothing: the first fails at the join, the second
+    /// says so before you try.
+    pub fn mint(mediator_did: Option<&str>) -> Result<Self, String> {
+        match mediator_did {
+            Some(mediator) => Self::mint_peer(mediator),
+            None => Self::mint_key(),
+        }
+    }
+
+    fn mint_peer(mediator_did: &str) -> Result<Self, String> {
+        use affinidi_tdk::dids::{DID, KeyType, PeerKeyRole};
+
+        let services = vta_peer_service(mediator_did);
+        let (did, secrets) = DID::generate_did_peer_with_services(
+            vec![
+                (PeerKeyRole::Verification, KeyType::Ed25519),
+                (PeerKeyRole::Encryption, KeyType::X25519),
+            ],
+            Some(services),
+        )
+        .map_err(|e| format!("mint the room's did:peer: {e}"))?;
+
+        // `#key-1` is the Ed25519 verification key — the one a room signs with. `#key-2` is
+        // key agreement and cannot sign, which is a distinction worth making by name rather
+        // than by position.
+        let secret = secrets
+            .into_iter()
+            .find(|s| s.id.ends_with("#key-1"))
+            .ok_or("the minted did:peer has no verification key")?;
+
+        Ok(Self { did, secret })
+    }
+
+    fn mint_key() -> Result<Self, String> {
         use base64::Engine as _;
         use base64::engine::general_purpose::URL_SAFE_NO_PAD as B64;
 
@@ -69,6 +139,17 @@ impl RoomIdentity {
         .map_err(|e| format!("build the room's signing secret: {e}"))?;
 
         Ok(Self { did, secret })
+    }
+
+    /// This identity's Ed25519 public key.
+    ///
+    /// Read from the secret rather than re-derived from the identifier. The identifier is a
+    /// `did:key` or a `did:peer` depending on whether the room advertises a mediator, and a
+    /// helper that assumed the first sliced the second by a fixed prefix length and produced
+    /// a multibase error about a colon. A party that holds a key does not need to parse its
+    /// own name to find it.
+    pub fn public_key(&self) -> &[u8] {
+        self.secret.get_public_bytes()
     }
 
     /// An invitation to `subject`: consent to join, single-use, and short-lived.
@@ -208,6 +289,44 @@ impl RoomIdentity {
 mod tests {
     use super::*;
 
+    /// A room given a mediator advertises it; one without stays `did:key`.
+    ///
+    /// The difference decides whether a member handed only the room's identifier can reach
+    /// its owner to ask to join — so it is asserted rather than assumed, and asserted on the
+    /// identifier itself, which is the thing that travels.
+    #[tokio::test]
+    async fn a_room_advertises_its_mediator_only_when_it_has_one() {
+        let mediator = "did:key:z6MkjchhfUsD6mmvni8mCdXHw216Xrm9bQe2mBH1P5RDjVJG";
+        let advertising = RoomIdentity::mint(Some(mediator)).unwrap();
+        assert!(
+            advertising.did.starts_with("did:peer:2"),
+            "a room with a mediator needs a method that can carry a service: {}",
+            advertising.did
+        );
+
+        // Resolved with the SAME resolver a browser member uses, so this asserts what a
+        // member would actually see rather than what this process happens to know. The
+        // service rides in the identifier — that is what "self-certifying with a service
+        // block" buys, and why resolving it needs no network.
+        use affinidi_did_common::DID;
+        use affinidi_did_resolver_traits::{PeerResolver, Resolver};
+        let doc = PeerResolver
+            .resolve(&DID::try_from(advertising.did.as_str()).expect("a well-formed DID"))
+            .expect("PeerResolver handles did:peer")
+            .expect("a did:peer resolves by computation");
+        assert!(
+            format!("{doc:?}").contains(mediator),
+            "the room's own identifier must name the mediator its owner listens on"
+        );
+
+        let silent = RoomIdentity::mint(None).unwrap();
+        assert!(
+            silent.did.starts_with("did:key:"),
+            "with nowhere to advertise, a room is a key and nothing else: {}",
+            silent.did
+        );
+    }
+
     /// What the room issues is what a member can actually verify and use.
     ///
     /// Asserted against the real verifiers rather than by reading the JSON back: the
@@ -215,15 +334,14 @@ mod tests {
     /// through `verify_chain` after a member has narrowed it.
     #[tokio::test]
     async fn the_room_issues_credentials_its_members_can_use() {
-        let room = RoomIdentity::mint().unwrap();
+        let room = RoomIdentity::mint(None).unwrap();
         let member = "did:key:z6MkiTBz1ymuepAQ4HEHYSF1H8quG5GLVVQR3djdX3mDooWp";
 
         // The invitation verifies against the room's own key — which a member recovers
         // from the room's identifier, with nothing to resolve. That property is what the
         // whole `did:key` choice above is for, so it is asserted rather than assumed.
         let vic: DTGCredential = serde_json::from_str(&room.invite(member).await.unwrap()).unwrap();
-        let (_, key_bytes) = multibase::decode(&room.did["did:key:".len()..]).unwrap();
-        vic.verify_proof_with_public_key(&key_bytes[2..])
+        vic.verify_proof_with_public_key(room.public_key())
             .expect("the room's own invitation must verify against the room's own key");
         assert_eq!(vic.issuer(), room.did);
         assert_eq!(vic.subject(), member);

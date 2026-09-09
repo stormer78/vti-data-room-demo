@@ -1444,7 +1444,10 @@ name = "dataroom-sample-room"
 version = "0.1.0"
 dependencies = [
  "affinidi-data-integrity",
+ "affinidi-did-common",
+ "affinidi-did-resolver-traits",
  "affinidi-secrets-resolver",
+ "affinidi-tdk",
  "axum",
  "base64 0.23.1",
  "chrono",

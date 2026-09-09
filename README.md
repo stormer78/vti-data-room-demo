@@ -32,9 +32,19 @@ curate, the epoch chain — and a host needs nothing but the request: a signed d
 chain the room issued. So that half works against any host, from a link. **Admission does
 not.** It needs the room's owner, who is reachable over DIDComm at the mediator the room
 advertises — and a `did:key` room advertises nothing, because a `did:key` has no service
-block. A real room mints `did:webvh` for exactly that reason. Until the demo's rooms do
-too, you can be handed a room you already hold keys for, but you cannot be let into one the
-site was not told about.
+block.
+
+**Set `MEDIATOR_DID` and the sample's rooms become `did:peer:2`**, which can carry a
+service block and so can advertise where their owner listens. Both sides already verify
+such a room with no network — `vta-sdk`'s verifier and the browser's invitation gate both
+resolve `did:peer` by computation. What is *not* built is the leg that uses it: the browser
+does not yet speak DIDComm, so an advertised mediator is a true statement nobody acts on.
+Until it does, you can be handed a room you already hold keys for, but you cannot be let
+into one the site was not told about.
+
+Production mints `did:webvh` rather than either, for a reason neither has: a room's
+controller must be able to change, and transferring ownership is a controller change.
+`did:peer` encodes its keys in the identifier, so it can never have one.
 
 **`sample-room/` exists so the demo runs standalone**, and for no other reason. It plays
 the two parts that live elsewhere in a real deployment:
@@ -50,9 +60,19 @@ demonstrating anything. The interface is the same either way.
 ## Running it
 
 ```
+# the host — the real binary, from the VTI workspace
+room-host --data-dir /tmp/room-host-data --listen 127.0.0.1:8300 \
+          --allow-origin http://127.0.0.1:8787
+
+# the owner, and the site
 cd sample-room && DEMO_WEB_DIR=../web cargo run
 # → http://127.0.0.1:8787
 ```
+
+Add `MEDIATOR_DID=did:key:z6Mk…` to make the rooms `did:peer:2` and advertise it. Without
+it they are `did:key` and advertise nothing, which is honest rather than broken — a room
+pointing at somewhere nobody listens fails at the join, while a room pointing nowhere says
+so before you try.
 
 ## What is real, and what is not
 

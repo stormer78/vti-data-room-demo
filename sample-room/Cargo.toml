@@ -7,6 +7,11 @@ edition = "2021"
 # itself — the room's **owner**, who admits people, and its **host**, who stores
 # what they write — and nothing else. Every other call the site makes is the
 # browser talking to its own copy of `vti-rooms`, compiled to wasm.
+[dev-dependencies]
+# The resolver a browser member uses, so the test asserts what a member would see.
+affinidi-did-resolver-traits = "0.1"
+affinidi-did-common = "0.4"
+
 [dependencies]
 # The same crate the browser runs, native. `mls` is the member/owner key layer;
 # the demo host keeps records in memory rather than through `vti-rooms::storage`,
@@ -24,6 +29,7 @@ base64 = "0.23"
 # 0.6, matching the VTI workspace the host is built from. 0.7 changed how an
 # authority chain links (parent id → parent digest), so a 0.7 issuer and a 0.6
 # verifier cannot interoperate.
+affinidi-tdk = "0.12"
 dtg-credentials = "0.9.1"
 affinidi-secrets-resolver = "0.5"
 affinidi-data-integrity = "0.7"

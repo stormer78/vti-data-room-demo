@@ -288,11 +288,12 @@ async fn join(
             ),
         ));
     }
-    // Against the room's own key, recovered from its own identifier. Nothing to resolve.
-    let (_, room_key) = multibase::decode(&room.identity.did["did:key:".len()..])
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("room did: {e}")))?;
+    // Against the room's own key, which the owner holds. Not re-derived from the room's
+    // identifier: that is a `did:key` or a `did:peer` depending on whether the room
+    // advertises a mediator, and only a member — who has nothing but the identifier — has
+    // to resolve it.
     invitation
-        .verify_proof_with_public_key(&room_key[2..])
+        .verify_proof_with_public_key(room.identity.public_key())
         .map_err(|_| {
             (
                 StatusCode::FORBIDDEN,
@@ -590,10 +591,28 @@ async fn register_with_host(
 async fn main() {
     let host_url = std::env::var("ROOM_HOST_URL").unwrap_or_else(|_| "http://127.0.0.1:8300".into());
 
+    // A mediator to advertise, if there is one. Rooms become `did:peer:2` and carry a
+    // `DIDCommMessaging` service naming it; without one they stay `did:key` and can only be
+    // joined by somebody this site was already told about.
+    //
+    // Unset by default rather than pointed at something plausible: a room advertising
+    // somewhere nobody listens fails at the join, while a room advertising nothing says so
+    // before you try.
+    let mediator_did = std::env::var("MEDIATOR_DID").ok();
+    match &mediator_did {
+        Some(m) => println!("rooms will advertise mediator {m}"),
+        None => println!(
+            "no MEDIATOR_DID — rooms will be did:key, so they advertise nowhere and can only \
+             be joined through this sample's own catalogue"
+        ),
+    }
+
     // One owner for the whole sample. In a real deployment this is a person with a VTA;
     // the rooms' keys are held by them, which is exactly how `RoomKeySigner` works
     // server-side — a room signs, but its key lives in its owner's agent.
-    let owner = RoomIdentity::mint().expect("mint the owner's identity");
+    // The owner is a party, not a room: nobody reaches it by resolving it here, so it needs
+    // no service block.
+    let owner = RoomIdentity::mint(None).expect("mint the owner's identity");
     println!("owner: {}", owner.did);
 
     let mut rooms = BTreeMap::new();
@@ -612,7 +631,8 @@ async fn main() {
         // Identity first, then the group. A room is a DTG node before it is a set of keys,
         // and the order is forced: a host told about a room it named could never let it
         // leave.
-        let identity = RoomIdentity::mint().expect("mint the room's identity");
+        let identity =
+            RoomIdentity::mint(mediator_did.as_deref()).expect("mint the room's identity");
         let group = RoomGroup::create(&identity.did).expect("create the demo room group");
         // Paired with the room's identifier here rather than earlier: a rung is bound to
         // its room in its associated data, and the group deliberately does not know which
