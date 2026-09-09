@@ -247,7 +247,7 @@ export class MediatorLink {
     // whole class is arranged to prevent.
     const reply =
       carrier === "tsp"
-        ? checked(await this.#tsp(to, id, { id, type, body }, (e) => e.thid === id))
+        ? checked(await this.#tsp(to, id, { id, type, body }, (e) => threadOf(e) === id))
         : await this.#didcomm(to, id, type, body);
     return { type: reply.type, body: reply.body };
   }
@@ -266,15 +266,20 @@ export class MediatorLink {
   async askTrustTask(to, carrier, document) {
     const id = document.id ?? crypto.randomUUID();
     if (carrier === "tsp") {
-      // A *request* needs no wrapper: its type is the document's own `type` field. A *reply*
-      // does, because correlation is the one thing a document cannot carry about itself and
-      // TSP has no header to carry it either.
-      // A Trust Task says no with a `trust-task-error` *document*, which the caller reads —
-      // but a counterparty that never got as far as dispatching one answers with a
-      // problem-report, and that has to surface too rather than arriving as an undefined
-      // document.
-      const framed = checked(await this.#tsp(to, id, document, (e) => e.thid === id));
-      return framed.document;
+      // **Neither direction is wrapped.** A request's type is the document's own `type`
+      // field, and a response threads itself: it carries `threadId`, set to the request's
+      // `id`. Nothing needs adding around either.
+      //
+      // This used to expect `{ thid, document }` — what `room-host` sent and `vtc-service`
+      // never did — so one client could read one host and not the other, and the failure was
+      // a reply no waiter matched, which looks exactly like a timeout. See
+      // OpenVTC/verifiable-trust-infrastructure#1383. A wrapper is still *accepted*, because
+      // that is cheap and a host may be older than the fix; it is neither sent nor required.
+      //
+      // `checked` because a counterparty that never got as far as dispatching answers with a
+      // problem-report, and that must surface rather than arriving as an undefined document.
+      const answer = checked(await this.#tsp(to, id, document, (e) => threadOf(e) === id));
+      return answer.document ?? answer;
     }
     const reply = await this.#didcomm(to, id, TRUST_TASK_ENVELOPE, document);
     return reply.body;
@@ -365,6 +370,15 @@ export class MediatorLink {
       this.#connection.close();
     } catch {}
   }
+}
+
+/// What a TSP frame threads on, whichever shape it arrived in.
+///
+/// A Trust-Task document threads itself with `threadId`. The demo's own admission protocol,
+/// which is not a Trust Task and has no such field, carries `thid`. A wrapped reply from an
+/// older host carries `thid` outside the document. All three mean the same thing.
+function threadOf(envelope) {
+  return envelope.threadId ?? envelope.thid ?? envelope.document?.threadId;
 }
 
 /// A refusal is an answer, not a transport failure — surface what was said.

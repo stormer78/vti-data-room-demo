@@ -882,23 +882,29 @@ impl Client {
             let threaded = frame
                 .thread_id
                 .clone()
+                .or_else(|| string_at(&envelope, "threadId"))
+                .or_else(|| string_at(&envelope, "thid"))
                 .or_else(|| {
                     envelope
-                        .get("thid")
-                        .and_then(|t| t.as_str())
-                        .map(str::to_string)
+                        .get("document")
+                        .and_then(|d| string_at(d, "threadId"))
                 })
                 .unwrap_or_default();
             if threaded != id {
                 continue;
             }
 
-            // Two shapes, because two kinds of correspondent answer here. A room's owner
-            // replies in the demo's own protocol — `{ type, body }`. A host replies with a
-            // Trust-Task document, which over TSP is wrapped only enough to correlate it:
-            // `{ thid, document }`. Taking the document when there is one is what tells them
-            // apart, and neither needs to know about the other.
-            if let Some(document) = envelope.get("document") {
+            // Two kinds of correspondent answer here. A room's owner replies in the demo's
+            // own protocol — `{ type, body }`, which is not a Trust Task and has no thread of
+            // its own, so it carries `thid`. A host replies with a **bare Trust-Task
+            // document**, which threads itself with `threadId`.
+            //
+            // A wrapped `{ thid, document }` is still accepted, because a host may predate
+            // OpenVTC/verifiable-trust-infrastructure#1383 — but it is no longer what either
+            // host sends, and expecting it was why this client could read `room-host` and not
+            // a VTC.
+            let document = envelope.get("document").unwrap_or(&envelope);
+            if document.get("threadId").is_some() {
                 return Ok((
                     document
                         .get("type")
@@ -939,6 +945,11 @@ impl Client {
             return Ok((typ, body));
         }
     }
+}
+
+/// One string member, if it is there and is a string.
+fn string_at(value: &serde_json::Value, member: &str) -> Option<String> {
+    value.get(member)?.as_str().map(str::to_string)
 }
 
 /// A reply of the type this step asked for, or a message saying which it got instead.
