@@ -129,12 +129,71 @@ impl RoomIdentity {
             self.did.clone(),
             actions.iter().map(|a| (*a).to_string()).collect(),
             now,
-            now + Duration::days(30),
+            Some(now + Duration::days(30)),
         )
         .map_err(|e| format!("build the authority credential: {e}"))?
         .with_id(&format!("urn:uuid:{}", uuid::Uuid::new_v4()));
         self.sign(&mut vac).await?;
         serde_json::to_string(vac.credential()).map_err(|e| e.to_string())
+    }
+
+    /// Attach this identity's `eddsa-jcs-2022` proof to a Trust-Task document.
+    ///
+    /// A host takes the presenter from the document's own proof and never from a payload
+    /// field — a payload says what is being asked, not who is asking — so this is how the
+    /// owner is authenticated when it registers a room.
+    pub async fn sign_document(&self, document: serde_json::Value) -> Result<serde_json::Value, String> {
+        let mut doc = document;
+        // A proof never covers itself.
+        doc.as_object_mut()
+            .ok_or("a signable document must be a JSON object")?
+            .remove("proof");
+        let proof = affinidi_data_integrity::DataIntegrityProof::sign(
+            &doc,
+            &self.secret,
+            affinidi_data_integrity::SignOptions::new(),
+        )
+        .await
+        .map_err(|e| format!("sign the document: {e}"))?;
+        doc.as_object_mut()
+            .ok_or("a signable document must be a JSON object")?
+            .insert("proof".into(), serde_json::to_value(&proof).map_err(|e| e.to_string())?);
+        Ok(doc)
+    }
+
+    /// Mint an authority presentation for one action, as this identity.
+    ///
+    /// The same act the browser performs, and the same shape: strings on the wire, leaf
+    /// first, narrowed to one action, and bound to the presenter — `audience` is compared
+    /// against whoever presents, so binding it to anyone else refuses the legitimate
+    /// holder and protects nobody.
+    pub async fn present(
+        &self,
+        vac: &str,
+        vmc: &str,
+        action: &str,
+    ) -> Result<serde_json::Value, String> {
+        let root: DTGCredential =
+            serde_json::from_str(vac).map_err(|e| format!("authority credential: {e}"))?;
+        let now = Utc::now();
+        let mut leaf = root
+            .attenuate(
+                self.did.clone(),
+                vec![action.to_string()],
+                now,
+                Some(now + Duration::hours(4)),
+                Some(self.did.clone()),
+            )
+            .map_err(|e| format!("narrow this authority to `{action}`: {e}"))?;
+        self.sign(&mut leaf).await?;
+
+        Ok(serde_json::json!({
+            "membership": vmc,
+            "authority": [
+                serde_json::to_string(leaf.credential()).map_err(|e| e.to_string())?,
+                vac,
+            ],
+        }))
     }
 
     async fn sign(&self, credential: &mut DTGCredential) -> Result<(), String> {
@@ -187,7 +246,7 @@ mod tests {
                 member.to_string(),
                 vec!["read".into()],
                 now,
-                now + Duration::hours(4),
+                Some(now + Duration::hours(4)),
                 Some(member.to_string()),
             )
             .expect("a member may narrow what the room granted");
@@ -196,7 +255,7 @@ mod tests {
                 member.to_string(),
                 vec!["curate".into()],
                 now,
-                now + Duration::hours(4),
+                Some(now + Duration::hours(4)),
                 None,
             )
             .is_err(),

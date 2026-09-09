@@ -106,11 +106,23 @@
 
   <section>
     <h2>What is real here, and what is not</h2>
-    <p><strong>Real:</strong> your key, the MLS group, the sealing. The broker stores
-      ciphertext and has no way to read it — not a policy, an inability.</p>
-    <p><strong>Not yet:</strong> the credentials. A real room admits you with credentials
-      the <em>room</em> issues, and a real host authorises every operation against a
-      presentation minted from them. This demo admits anyone who asks.</p>
+    <p><strong>Real.</strong> Your key, minted and held in WebAssembly — this page never
+      sees the private half. The MLS group, the sealing and the epoch chain are
+      <code>vti-rooms</code> itself, the same crate the services link. The invitation, the
+      membership and the authority are DTG credentials the room signed. Every record
+      operation goes to <strong>the real <code>room-host</code></strong> as a signed Trust
+      Task, and it authorises each one against a chain narrowed to that single action —
+      <code>read</code> to list, <code>write</code> to store. It stores ciphertext and has
+      no code path that could read it.</p>
+    <p><strong>Standing in.</strong> The owner. In a real room that is a person with an
+      agent, deciding; here it admits anyone who asks and says so. What it issues is not
+      pretended — the credentials are real and the ceremony is the same either side of the
+      decision.</p>
+    <p><strong>Deliberately absent.</strong> The <code>private</code> tier, whose subject
+      binding needs a zero-knowledge profile the working group has not settled. And the
+      epoch key chain: this room advances epochs without minting rungs, so you can read
+      from where you joined and no further. That is honest <code>FromJoin</code>
+      behaviour, and it is what the two numbers above are telling you.</p>
     <p id="log"></p>
   </section>
 </main>
@@ -294,8 +306,79 @@ function showEpochs() {
 }
 
 // ── records ────────────────────────────────────────────────────────────────
+//
+// These go to the room's HOST, not to the sample room's own API — a real
+// `POST /trust-tasks`, and the same one a VTC serves. Two things travel with every
+// request and the host takes nothing else from it:
+//
+//   - the **presenter**, from the document's own `eddsa-jcs-2022` proof. Never from a
+//     payload field: a presentation says what may be done, not who is doing it, so an
+//     unbound one is a bearer token anyone observing it inherits.
+//   - the **chain**, minted here per request and narrowed to exactly one action.
+//
+// Both are produced in wasm, by the key this page never sees.
+
+/// The host this demo's rooms are on. In a real deployment it comes from the room's
+/// address, not from a constant — the site works against a host it has never seen.
+const HOST = localStorage.getItem("dr:host") ?? "http://127.0.0.1:8300";
+
+/// Send one Trust Task to the host, signed, carrying a presentation for `action`.
+async function hostTask(type, action, payload) {
+  const held = S.get("dr:room:" + currentRoom);
+  const presentation = JSON.parse(identity.present(
+    JSON.stringify(held.authority),
+    JSON.stringify(held.membership),
+    action,
+    null,            // no challenge: this host issues none. A nonce is the verifier's.
+  ));
+
+  const document = {
+    id: `urn:uuid:${crypto.randomUUID()}`,
+    type,
+    issuedAt: new Date().toISOString().replace(/\.\d+Z$/, "Z"),
+    payload: { roomId: currentRoomDid, presentation, ...payload },
+  };
+
+  const res = await fetch(`${HOST}/trust-tasks`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: identity.signDocument(JSON.stringify(document)),
+  });
+  const body = await res.json().catch(() => null);
+  if (!res.ok) {
+    // A host's `trust-task-error` is its ANSWER, not a broken network — so it is shown
+    // as a refusal with the host's own words, never as a failed request.
+    const reason = body?.payload?.reason ?? body?.payload?.message ?? JSON.stringify(body);
+    throw new Error(reason);
+  }
+  return body.payload;
+}
+
+/// List, then fetch each record.
+///
+/// Two calls because they are two questions. `list` answers "what is in this room" and
+/// returns **metadata only, never bodies** — a host that returned content on a list would
+/// be handing out every record to anyone entitled to see that records exist. `get` answers
+/// "give me this one", and only then does ciphertext move.
 async function loadRecords() {
-  const recs = await (await fetch(`/api/rooms/${currentRoom}/records`)).json();
+  let recs;
+  try {
+    const listed = (await hostTask(
+      "https://trusttasks.org/spec/rooms/records/list/0.1", "read", {})).records ?? [];
+    recs = [];
+    for (const meta of listed) {
+      const got = await hostTask(
+        "https://trusttasks.org/spec/rooms/records/get/0.1", "read", { key: meta.key });
+      // A stored record comes back FLAT — `sealed` is the ciphertext, with `nonce` and
+      // `epoch` beside it — while `put` takes the same three as one `SealedContent`
+      // object. Reassembled here rather than at the call site, because opening needs all
+      // three together and the epoch is the one that decides which key is used.
+      recs.push({
+        ...meta, ...got,
+        sealed: { ciphertext: got.sealed, nonce: got.nonce, epoch: got.epoch },
+      });
+    }
+  } catch (e) { log("the host refused the read: " + e.message); return; }
   $("records-panel").classList.remove("hide");
   const box = $("records");
   box.innerHTML = "";
@@ -330,21 +413,27 @@ async function write() {
   const body = $("rec-body").value;
   if (!key) { log("a record needs a key"); return; }
 
-  // Ask for the version first. It is bound *into* the ciphertext along with the
-  // room, the key and the epoch — seal against the wrong one and the record
-  // stores fine and never opens.
-  const { nextVersion } = await (await fetch(`/api/rooms/${currentRoom}/next-version`)).json();
-  const sealed = member.sealRecord(key, BigInt(nextVersion), new TextEncoder().encode(body));
+  // Create-only, so the version is known without asking: `expectedVersion: 0` is the
+  // precondition "this key does not exist yet". It matters because the version is bound
+  // *into* the ciphertext along with the room, the key and the epoch — seal against the
+  // wrong one and the record stores fine and never opens.
+  const sealed = JSON.parse(member.sealRecord(key, 1n, new TextEncoder().encode(body)));
 
-  const res = await fetch(`/api/rooms/${currentRoom}/records/${encodeURIComponent(key)}`, {
-    method: "PUT",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ sealed: JSON.parse(sealed), expectedVersion: nextVersion, author: me.did }),
-  });
-  if (!res.ok) { log("refused: " + await res.text()); return; }
+  try {
+    // `write`, not `read`. The presentation is narrowed to exactly this action, and a
+    // member holding only `read` is refused by their own `attenuate` before the host
+    // ever sees it.
+    await hostTask("https://trusttasks.org/spec/rooms/records/put/0.1", "write", {
+      key, sealed, expectedVersion: 0,
+    });
+  } catch (e) { log("the host refused the write: " + e.message); return; }
+
   $("rec-key").value = ""; $("rec-body").value = "";
-  await loadRecords();
   log("");
+  // After the log is cleared, not before: `loadRecords` reports its own failures there,
+  // and clearing afterwards swallowed them — which is how a working write looked like a
+  // silently empty room.
+  await loadRecords();
 }
 
 $("mint").onclick = mint;

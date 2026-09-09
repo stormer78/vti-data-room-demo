@@ -1443,6 +1443,7 @@ dependencies = [
 name = "dataroom-sample-room"
 version = "0.1.0"
 dependencies = [
+ "affinidi-data-integrity",
  "affinidi-secrets-resolver",
  "axum",
  "base64 0.23.1",
@@ -1451,6 +1452,7 @@ dependencies = [
  "ed25519-dalek 3.0.0",
  "getrandom 0.4.3",
  "multibase",
+ "reqwest",
  "serde",
  "serde_json",
  "tokio",
@@ -1638,9 +1640,9 @@ dependencies = [
 
 [[package]]
 name = "dtg-credentials"
-version = "0.7.0"
+version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "249ac520c8e0ebe2616af85ecb9377c9be49541267060c3157f906e4ce214445"
+checksum = "3f292eb5ba50d7f69dd9671e87b4d6ceddbeb973cbf0c05715220bee8446ff90"
 dependencies = [
  "affinidi-data-integrity",
  "affinidi-secrets-resolver",
@@ -1649,7 +1651,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_json_canonicalizer",
- "sha2 0.11.0",
+ "sha2 0.10.9",
  "thiserror",
  "tracing",
 ]

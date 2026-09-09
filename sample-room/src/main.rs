@@ -56,6 +56,13 @@ struct Room {
     /// The room's own signing identity. A room issues the credentials that govern it, so
     /// it needs a key of its own — see [`crate::owner`].
     identity: RoomIdentity,
+    /// The owner's own credentials for this room, so it can act as a member with `admin`.
+    ///
+    /// Minting an epoch at the host is a room operation like any other: it takes a
+    /// presentation, and the room has to have granted the owner the authority to make one.
+    /// A room whose owner could act without a credential would be a room with a back door.
+    owner_membership: String,
+    owner_authority: String,
     /// Invitations already spent, by credential id.
     ///
     /// The owner's half of single-use. The member enforces it too, in their own browser,
@@ -86,7 +93,16 @@ struct Record {
     author: String,
 }
 
-type Rooms = Arc<Mutex<BTreeMap<String, Room>>>;
+/// Everything the sample holds: the rooms, the owner that governs them, and where their
+/// host is. One state rather than three globals, because the owner and the host URL are
+/// needed by the same handlers that touch a room.
+struct Demo {
+    owner: RoomIdentity,
+    host_url: String,
+    rooms: Mutex<BTreeMap<String, Room>>,
+}
+
+type Rooms = Arc<Demo>;
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -101,7 +117,7 @@ struct CatalogueEntry {
 }
 
 async fn catalogue(State(rooms): State<Rooms>) -> Json<Vec<CatalogueEntry>> {
-    let rooms = rooms.lock().await;
+    let rooms = rooms.rooms.lock().await;
     Json(
         rooms
             .values()
@@ -135,7 +151,7 @@ async fn invite(
     Path(room_id): Path<String>,
     Json(req): Json<InviteRequest>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    let rooms = rooms.lock().await;
+    let rooms = rooms.rooms.lock().await;
     let room = rooms
         .get(&room_id)
         .ok_or((StatusCode::NOT_FOUND, format!("no room `{room_id}`")))?;
@@ -182,11 +198,12 @@ struct JoinResponse {
 
 /// Admit anyone who asks — see the module docs on why that is stated rather than hidden.
 async fn join(
-    State(rooms): State<Rooms>,
+    State(demo): State<Rooms>,
     Path(room_id): Path<String>,
     Json(req): Json<JoinRequest>,
 ) -> Result<Json<JoinResponse>, (StatusCode, String)> {
-    let mut rooms = rooms.lock().await;
+    let (owner, host_url) = (&demo.owner, demo.host_url.clone());
+    let mut rooms = demo.rooms.lock().await;
     let room = rooms
         .get_mut(&room_id)
         .ok_or((StatusCode::NOT_FOUND, format!("no room `{room_id}`")))?;
@@ -278,6 +295,14 @@ async fn join(
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
 
     let epoch = (change.epoch + 1) as u32;
+
+    // The commit advanced the epoch, so the host has to be told before the new member can
+    // write anything: a record is sealed under the epoch current when it was written, and
+    // a host refuses ciphertext bound to an epoch it does not know about.
+    if let Err(e) = mint_epoch(&host_url, &owner, room, epoch).await {
+        return Err((StatusCode::BAD_GATEWAY, e));
+    }
+
     Ok(Json(JoinResponse {
         room_id,
         welcome: B64.encode(welcome),
@@ -301,7 +326,7 @@ async fn list_records(
     State(rooms): State<Rooms>,
     Path(room_id): Path<String>,
 ) -> Result<Json<Vec<Record>>, (StatusCode, String)> {
-    let rooms = rooms.lock().await;
+    let rooms = rooms.rooms.lock().await;
     let room = rooms
         .get(&room_id)
         .ok_or((StatusCode::NOT_FOUND, format!("no room `{room_id}`")))?;
@@ -324,7 +349,7 @@ async fn put_record(
     Path((room_id, key)): Path<(String, String)>,
     Json(req): Json<PutRecord>,
 ) -> Result<Json<Record>, (StatusCode, String)> {
-    let mut rooms = rooms.lock().await;
+    let mut rooms = rooms.rooms.lock().await;
     let room = rooms
         .get_mut(&room_id)
         .ok_or((StatusCode::NOT_FOUND, format!("no room `{room_id}`")))?;
@@ -357,15 +382,116 @@ async fn next_version(
     State(rooms): State<Rooms>,
     Path(room_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
-    let rooms = rooms.lock().await;
+    let rooms = rooms.rooms.lock().await;
     let room = rooms
         .get(&room_id)
         .ok_or((StatusCode::NOT_FOUND, format!("no room `{room_id}`")))?;
     Ok(Json(serde_json::json!({ "nextVersion": room.next_version })))
 }
 
+/// Tell the host the room's epoch advanced.
+///
+/// Every membership change is a commit and every commit advances the epoch, and a record
+/// is sealed under the epoch current when it was written. A host that has not been told
+/// refuses the write — "record is sealed under epoch 2, room is at 1" — which is the host
+/// being right: it is the party that knows what version a record will be stored at, and it
+/// cannot accept ciphertext bound to an epoch it has never heard of.
+///
+/// Needs `admin`, which is why the room issues its owner credentials of its own.
+///
+/// No `link` yet: this sample drives `RoomGroup` directly rather than `SealedRoom`, so it
+/// never mints a rung, and the room's history is readable only from where a member joined.
+/// That is the honest `FromJoin` behaviour and the site shows it — `earliest readable`
+/// equal to `your epoch` is exactly this and not a bug.
+async fn mint_epoch(
+    host_url: &str,
+    owner: &RoomIdentity,
+    room: &Room,
+    epoch: u32,
+) -> Result<(), String> {
+    let presentation = owner
+        .present(&room.owner_authority, &room.owner_membership, "admin")
+        .await?;
+    let document = serde_json::json!({
+        "id": format!("urn:uuid:{}", uuid::Uuid::new_v4()),
+        "type": "https://trusttasks.org/spec/rooms/epoch/mint/0.1",
+        "issuedAt": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        "payload": { "roomId": room.identity.did, "epoch": epoch, "presentation": presentation },
+    });
+    let signed = owner.sign_document(document).await?;
+
+    let res = reqwest::Client::new()
+        .post(format!("{host_url}/trust-tasks"))
+        .json(&signed)
+        .send()
+        .await
+        .map_err(|e| format!("reach the host: {e}"))?;
+    let status = res.status();
+    let body = res.text().await.unwrap_or_default();
+    if !status.is_success() {
+        return Err(format!("the host refused the epoch mint ({status}): {body}"));
+    }
+    Ok(())
+}
+
+/// Register a room with its host.
+///
+/// The order is forced and it is the whole reason a room has an identity of its own: the
+/// DID is minted first, and a host is then *told about* a room that already exists. A host
+/// that named the room would be a host the room could never leave — "a room identified by
+/// something its host chose could not move to another host".
+///
+/// Signed as the owner, not as the room. A registration is a request to store something,
+/// authorised against the party asking; signing as the room would claim the room is asking
+/// to be stored, which is neither true nor something the host can check.
+async fn register_with_host(
+    host_url: &str,
+    owner: &RoomIdentity,
+    room_did: &str,
+) -> Result<(), String> {
+    let document = serde_json::json!({
+        "id": format!("urn:uuid:{}", uuid::Uuid::new_v4()),
+        "type": "https://trusttasks.org/spec/rooms/create/0.1",
+        "issuedAt": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        "payload": {
+            "roomId": room_did,
+            // `attributed`: the host stores ciphertext it cannot read, and learns which
+            // member acted. `open` would defeat the demonstration; `private` needs a
+            // zero-knowledge subject binding the working group has not settled, and a tier
+            // that quietly behaved like this one would misrepresent it.
+            "visibility": "attributed",
+            "ownerDid": owner.did,
+        },
+    });
+    let signed = owner.sign_document(document).await?;
+
+    let res = reqwest::Client::new()
+        .post(format!("{host_url}/trust-tasks"))
+        .json(&signed)
+        .send()
+        .await
+        .map_err(|e| format!("reach the host at {host_url}: {e}"))?;
+
+    let status = res.status();
+    let body = res.text().await.unwrap_or_default();
+    if !status.is_success() {
+        // A host's `trust-task-error` is its ANSWER, not a broken network. Surfacing the
+        // body is the difference between "the host refused, and here is why" and a number.
+        return Err(format!("the host refused to register the room ({status}): {body}"));
+    }
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() {
+    let host_url = std::env::var("ROOM_HOST_URL").unwrap_or_else(|_| "http://127.0.0.1:8300".into());
+
+    // One owner for the whole sample. In a real deployment this is a person with a VTA;
+    // the rooms' keys are held by them, which is exactly how `RoomKeySigner` works
+    // server-side — a room signs, but its key lives in its owner's agent.
+    let owner = RoomIdentity::mint().expect("mint the owner's identity");
+    println!("owner: {}", owner.did);
+
     let mut rooms = BTreeMap::new();
     for (id, label) in [
         ("demo-library", "The Library — a shared reading room"),
@@ -376,12 +502,37 @@ async fn main() {
         // leave.
         let identity = RoomIdentity::mint().expect("mint the room's identity");
         let group = RoomGroup::create(&identity.did).expect("create the demo room group");
+        // The room grants its owner everything, including `admin` — which is what lets the
+        // owner mint an epoch at the host. Issued by the room, like every other authority
+        // in it: an owner acting without a credential would be a back door.
+        let owner_membership = identity
+            .issue_membership(&owner.did)
+            .await
+            .expect("issue the owner's membership");
+        let owner_authority = identity
+            .issue_authority(&owner.did, &["read", "write", "curate", "admin"])
+            .await
+            .expect("issue the owner's authority");
+
+        match register_with_host(&host_url, &owner, &identity.did).await {
+            Ok(()) => println!("registered {id} ({}) with {host_url}", identity.did),
+            Err(e) => {
+                // Not fatal: the demo is still worth running against the sample's own
+                // record API, and a host that is not up yet is the common case when
+                // somebody starts one process and not the other. Say which, plainly.
+                eprintln!("warning: {id} is not registered with a host — {e}");
+                eprintln!("         start `room-host --allow-origin http://127.0.0.1:8787` and restart this.");
+            }
+        }
+
         rooms.insert(
             id.to_string(),
             Room {
                 id: id.to_string(),
                 label: label.to_string(),
                 identity,
+                owner_membership,
+                owner_authority,
                 spent_invitations: Vec::new(),
                 group,
                 records: BTreeMap::new(),
@@ -389,7 +540,11 @@ async fn main() {
             },
         );
     }
-    let rooms: Rooms = Arc::new(Mutex::new(rooms));
+    let rooms: Rooms = Arc::new(Demo {
+        owner,
+        host_url,
+        rooms: Mutex::new(rooms),
+    });
 
     let web = std::env::var("DEMO_WEB_DIR").unwrap_or_else(|_| "../web".to_string());
     let app = Router::new()
