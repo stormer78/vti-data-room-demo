@@ -100,18 +100,48 @@ pub struct Admitted {
     pub steps: Vec<String>,
 }
 
-/// The mediator a `did:peer:2` advertises, or `None` if it advertises nothing.
+/// What a room advertises: where its owner listens, and over what.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Advertised {
+    /// The mediator's DID.
+    pub mediator: String,
+    /// Whether the room says it serves TSP there.
+    pub tsp: bool,
+    /// Whether the room says it serves DIDComm there.
+    pub didcomm: bool,
+}
+
+impl Advertised {
+    /// The carrier to use: **TSP if offered, DIDComm otherwise.**
+    ///
+    /// Chosen from what the room says rather than from what happens to work. A mediator
+    /// carries both on one socket, so a client that always spoke TSP would usually succeed —
+    /// and would break, with nothing in the room's document having changed, the first time
+    /// it met an owner that only served DIDComm.
+    pub fn preferred(&self) -> Option<&'static str> {
+        match (self.tsp, self.didcomm) {
+            (true, _) => Some("tsp"),
+            (false, true) => Some("didcomm"),
+            (false, false) => None,
+        }
+    }
+}
+
+/// Read a room's own identifier for where its owner listens, and over what.
 ///
 /// **This is the lookup that makes a room addressable.** A member holds an identifier and
 /// nothing else; reading the service block out of it is how they find the party that can
 /// admit them. `did:peer` resolution is pure computation, so this costs no network and
-/// works offline — which is the property that let the room be a `did:peer` rather than
-/// something that needs a registry.
+/// works offline — the property that let the room be a `did:peer` rather than something
+/// that needs a registry.
 ///
 /// `serviceEndpoint.uri` is the mediator's **DID**, not a URL, matching how the `ai-agent`
 /// and `room` `did:webvh` templates advertise `DIDCommMessaging`. A client dials the
 /// mediator by DID, which is what lets every room on one mediator share a connection.
-pub fn advertised_mediator(room_did: &str) -> Result<Option<String>, String> {
+///
+/// `None` when the room advertises nothing — a `did:key` room, which can be verified but
+/// not reached.
+pub fn advertised_mediator(room_did: &str) -> Result<Option<Advertised>, String> {
     use affinidi_did_common::DID;
     use affinidi_did_resolver_traits::{PeerResolver, Resolver};
 
@@ -126,15 +156,41 @@ pub fn advertised_mediator(room_did: &str) -> Result<Option<String>, String> {
         .ok_or_else(|| format!("`{room_did}` is not a did:peer this build resolves"))?
         .map_err(|e| format!("`{room_did}` did not resolve: {e}"))?;
 
+    let mut found: Option<Advertised> = None;
     for service in &doc.service {
-        if !service.type_.iter().any(|t| t == "DIDCommMessaging") {
+        // `dm` is the did:peer abbreviation for `DIDCommMessaging`; a resolver may expand it
+        // or leave it, so both spellings mean the same service.
+        let didcomm = service
+            .type_
+            .iter()
+            .any(|t| t == "DIDCommMessaging" || t == "dm");
+        let tsp = service.type_.iter().any(|t| t == "TSPTransport");
+        if !didcomm && !tsp {
             continue;
         }
-        if let Some(uri) = endpoint_uri(&service.service_endpoint) {
-            return Ok(Some(uri));
+        let Some(uri) = endpoint_uri(&service.service_endpoint) else {
+            continue;
+        };
+
+        match &mut found {
+            // One mediator per room. A second service naming a different one would mean two
+            // places to ask, and nothing says which answers — so the first is taken and the
+            // rest are only read for which carriers they add.
+            Some(a) if a.mediator == uri => {
+                a.tsp |= tsp;
+                a.didcomm |= didcomm;
+            }
+            Some(_) => continue,
+            None => {
+                found = Some(Advertised {
+                    mediator: uri,
+                    tsp,
+                    didcomm,
+                })
+            }
         }
     }
-    Ok(None)
+    Ok(found)
 }
 
 /// Pull the endpoint URI out of a service block, whichever of the several shapes the

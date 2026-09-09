@@ -34,8 +34,12 @@ import {
   didPeer,
   ed25519,
   x25519,
+  multibase,
   packAuthcryptJson,
   resolveKeyAgreement,
+  tspPack,
+  tspPackRouted,
+  tspUnpack,
   wrapForward,
 } from "./vendor/didcomm.js";
 
@@ -53,7 +57,7 @@ export const ADMITTED = "https://dataroom.demo/admission/0.1/admitted";
 
 const REPLY_TIMEOUT_MS = 30_000;
 
-/// The mediator a room advertises, or `null` if it advertises none.
+/// What a room advertises: where its owner listens, and over what.
 ///
 /// **The lookup that makes a room addressable.** `did:peer` resolution is pure computation,
 /// so this costs no network and works offline — the property that let a room be a
@@ -62,15 +66,47 @@ const REPLY_TIMEOUT_MS = 30_000;
 /// `serviceEndpoint.uri` is the mediator's **DID**, not a URL, matching how the `ai-agent`
 /// and `room` `did:webvh` templates advertise `DIDCommMessaging`. A client dials the
 /// mediator by DID, which is what lets every room on one mediator share one connection.
+///
+/// Returns `null` when the room advertises nothing — a `did:key` room, which can be
+/// verified but not reached.
 export function advertisedMediator(roomDid) {
   if (!roomDid.startsWith("did:peer:")) return null;
   const { didDocument } = didPeer.resolve(roomDid);
+
+  let found = null;
   for (const service of didDocument.service ?? []) {
     const types = Array.isArray(service.type) ? service.type : [service.type];
-    if (!types.includes("DIDCommMessaging") && !types.includes("dm")) continue;
+    // `dm` is the did:peer abbreviation for `DIDCommMessaging`; a resolver may expand it or
+    // leave it, so both spellings mean the same service.
+    const didcomm = types.includes("DIDCommMessaging") || types.includes("dm");
+    const tsp = types.includes("TSPTransport");
+    if (!didcomm && !tsp) continue;
+
     const uri = endpointUri(service.serviceEndpoint);
-    if (uri) return uri;
+    if (!uri) continue;
+
+    // One mediator per room. A second service naming a different one would mean two places
+    // to ask and nothing saying which answers, so the first wins and the rest are read only
+    // for the carriers they add.
+    if (!found) found = { mediator: uri, tsp, didcomm };
+    else if (found.mediator === uri) {
+      found.tsp ||= tsp;
+      found.didcomm ||= didcomm;
+    }
   }
+  return found;
+}
+
+/// The carrier to use: **TSP if the room offers it, DIDComm otherwise.**
+///
+/// Chosen from what the room says rather than from what happens to work. A mediator carries
+/// both on one socket, so a client that always spoke TSP would usually succeed — and would
+/// break, with nothing in the room's document having changed, the first time it met an owner
+/// that served only DIDComm.
+export function preferredCarrier(advertised) {
+  if (!advertised) return null;
+  if (advertised.tsp) return "tsp";
+  if (advertised.didcomm) return "didcomm";
   return null;
 }
 
@@ -115,30 +151,56 @@ export function mintTransportIdentity() {
   return buildHolder(edSecret, peer.did, peer.authKid, peer.keyAgreementKid);
 }
 
-/// One connection to a mediator, and the request/reply plumbing over it.
+/// The Ed25519 verification key a `did:peer` names, from its own identifier.
 ///
-/// The reply is matched by DIDComm `thid`, not by "the next frame that arrives": a mediator
-/// delivers status messages and pings of its own, and a client that took the first thing off
-/// the socket would read one of those as the owner's answer.
+/// TSP verifies the outer signature against this, where DIDComm verifies the envelope
+/// against the key-agreement key — two different keys doing the same job for two carriers,
+/// and both recoverable from the DID without a network.
+function verificationKey(did) {
+  const { didDocument } = didPeer.resolve(did);
+  for (const vm of didDocument.verificationMethod ?? []) {
+    if (!vm.publicKeyMultibase) continue;
+    const { codec, key } = multibase.decodeMultikey(vm.publicKeyMultibase);
+    // `0xed 0x01` — Ed25519. The key-agreement half is `0xec 0x01`, and signing with it is
+    // not possible, so this picks by what the key *is* rather than by its position.
+    if (codec[0] === 0xed && codec[1] === 0x01) return key;
+  }
+  throw new Error(`${did} names no Ed25519 verification key, so nothing it sends can be verified`);
+}
+
+/// One connection to a mediator, and the request/reply plumbing over it — on either carrier.
+///
+/// **One socket for both.** A mediator permits one websocket per DID and sniffs the TSP
+/// magic byte on a binary frame to decide which handler gets it, so TSP rides the DIDComm
+/// session rather than opening a second connection. A second socket is not an alternative:
+/// the mediator evicts one of them as a duplicate channel.
+///
+/// The reply is matched by thread, not by "the next frame that arrives": a mediator delivers
+/// status messages and pings of its own, and a client that took the first thing off the
+/// socket would read one of those as the owner's answer. DIDComm threads in its envelope;
+/// TSP has no headers at all, so the reply carries its own `thid`.
 export class OwnerConnection {
-  constructor(connection, holder, roomDid, mediatorDid, roomKeyAgreement, mediatorKeyAgreement) {
+  constructor(connection, holder, roomDid, mediatorDid, roomKeyAgreement, mediatorKeyAgreement, carrier) {
     this.connection = connection;
     this.holder = holder;
     this.roomDid = roomDid;
     this.mediatorDid = mediatorDid;
     this.room = roomKeyAgreement;
     this.mediator = mediatorKeyAgreement;
+    this.carrier = carrier;
   }
 
   /// Open a connection to the owner of `roomDid`, through the mediator that room advertises.
-  static async open(roomDid, holder) {
-    const mediatorDid = advertisedMediator(roomDid);
-    if (!mediatorDid) {
+  static async open(roomDid, holder, carrier) {
+    const advertised = advertisedMediator(roomDid);
+    if (!advertised) {
       throw new Error(
-        `${roomDid} advertises no DIDComm service, so there is nowhere to ask to join — a `
+        `${roomDid} advertises no service, so there is nowhere to ask to join — a `
           + `did:key room can be verified but not reached`,
       );
     }
+    const mediatorDid = advertised.mediator;
+    carrier ??= preferredCarrier(advertised);
     const connection = await connectMediatorSession({
       holder: holder.identity,
       mediatorDid,
@@ -154,7 +216,24 @@ export class OwnerConnection {
       mediatorDid,
       connection.vta,
       connection.mediator,
+      carrier,
     );
+  }
+
+  /// The TSP keys for this member and the two parties it seals to.
+  ///
+  /// The member's X25519 half is the Montgomery form of its Ed25519 secret — the same
+  /// derivation the `did:peer:2` above advertises, which is what makes the key a
+  /// counterparty resolves the key we actually hold.
+  tspKeys() {
+    const edSecret = this.holder.signing.privateKey;
+    const senderEncryptionKey = ed25519.utils.toMontgomerySecret(edSecret);
+    return {
+      senderSigningKey: edSecret,
+      senderEncryptionKey,
+      room: rawX25519(this.room.keyAgreementPublicJwk),
+      mediator: rawX25519(this.mediator.keyAgreementPublicJwk),
+    };
   }
 
   /// Send one message to the room and wait for the reply threaded to it.
@@ -164,6 +243,69 @@ export class OwnerConnection {
   /// unwraps it and queues the inner envelope for the room's pickup.
   async ask(type, body) {
     const id = crypto.randomUUID();
+    return this.carrier === "tsp"
+      ? await this.askOverTsp(id, type, body)
+      : await this.askOverDidcomm(id, type, body);
+  }
+
+  /// TSP: seal end-to-end to the room, wrap in a routing layer sealed to the mediator, and
+  /// send as a binary frame on the shared socket.
+  ///
+  /// The envelope is `{ id, type, body }` *in the payload*, because TSP has no headers.
+  /// DIDComm supplies `type` and `thid` around the message; over TSP the message carries
+  /// them itself. The same three fields either way, which is what lets one owner-side
+  /// decision serve both.
+  async askOverTsp(id, type, body) {
+    const keys = this.tspKeys();
+    const vid = this.holder.identity.did;
+    const payload = new TextEncoder().encode(JSON.stringify({ id, type, body }));
+
+    const inner = await tspPack(payload, vid, this.roomDid, {
+      senderSigningKey: keys.senderSigningKey,
+      senderEncryptionKey: keys.senderEncryptionKey,
+      receiverEncryptionKey: keys.room,
+    });
+    const routed = await tspPackRouted(inner.bytes, [this.roomDid], vid, this.mediatorDid, {
+      senderSigningKey: keys.senderSigningKey,
+      senderEncryptionKey: keys.senderEncryptionKey,
+      receiverEncryptionKey: keys.mediator,
+    });
+
+    // The predicate decides which inbound frame *is* this reply. Without one the next frame
+    // to arrive would be handed to this waiter — and the mediator sends frames of its own.
+    // Only this layer can tell them apart, because only it holds the keys, so the predicate
+    // unpacks and keeps what it decoded rather than making the caller unpack again.
+    const roomSigning = verificationKey(this.roomDid);
+    let decoded = null;
+    const claims = async (bytes) => {
+      try {
+        const message = await tspUnpack(bytes, {
+          receiverDecryptionKey: keys.senderEncryptionKey,
+          senderEncryptionKey: keys.room,
+          senderSigningKey: roomSigning,
+        });
+        const envelope = JSON.parse(new TextDecoder().decode(message.payload));
+        if (envelope.thid !== id) return false;
+        decoded = envelope;
+        return true;
+      } catch {
+        return false;
+      }
+    };
+
+    // Register the waiter before sending — both synchronous, so no frame can arrive between
+    // them and be handed to nobody.
+    const reply = this.connection.awaitTspFrame(REPLY_TIMEOUT_MS, claims);
+    this.connection.sendBinary(routed.bytes);
+    await reply;
+
+    return this.checked(decoded);
+  }
+
+  /// DIDComm: two hops, because a mediator refuses direct delivery of inner messages —
+  /// authcrypt to the room, then wrap that in a `routing/2.0/forward` addressed to the
+  /// mediator, which unwraps it and queues the inner envelope for the room's pickup.
+  async askOverDidcomm(id, type, body) {
     const message = JSON.stringify({
       id,
       type,
@@ -185,13 +327,17 @@ export class OwnerConnection {
     // listening for it.
     const reply = this.connection.waitFor(id, REPLY_TIMEOUT_MS);
     this.connection.send(outer);
-    const message_ = await reply;
+    return this.checked(await reply);
+  }
 
-    if (String(message_.type ?? "").includes("problem-report")) {
-      const b = message_.body ?? {};
+  /// A refusal is an answer, not a transport failure — surface what the owner said.
+  checked(message) {
+    if (!message) throw new Error("the owner sent nothing this request could use");
+    if (String(message.type ?? "").includes("problem-report")) {
+      const b = message.body ?? {};
       throw new Error(`the owner refused [${b.code ?? "no code"}]: ${b.comment ?? ""}`);
     }
-    return message_;
+    return message;
   }
 
   close() {
@@ -213,4 +359,10 @@ export function signedRequest(identity, roomDid, transportDid, extra = {}) {
     ...extra,
   };
   return JSON.parse(identity.signDocument(JSON.stringify(body)));
+}
+
+/// The raw 32 bytes behind an X25519 public JWK.
+function rawX25519(jwk) {
+  const b64 = jwk.x.replace(/-/g, "+").replace(/_/g, "/");
+  return Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
 }

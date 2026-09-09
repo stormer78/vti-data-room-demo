@@ -48,10 +48,33 @@ reads the mediator out of it, mints its two identities, asks, verifies the VIC i
 presents it with a KeyPackage, and joins the group.
 
 **The browser does the same.** Paste a room's DID into the site, or follow a
-`#/room/<roomDid>` link to a room it holds no keys for, and it runs that ceremony over
-DIDComm — the same `@openvtc/pnm-core` stack the wallet extension speaks, bundled into
+`#/room/<roomDid>` link to a room it holds no keys for, and it runs that ceremony — the same
+`@openvtc/pnm-core` and `@openvtc/vti-tsp-js` the wallet extension speaks, bundled into
 `web/vendor/didcomm.js`. So the site now admits you to rooms it was never told about, which
 is the claim it could not previously make.
+
+### Two carriers, one socket, and the room says which
+
+A room advertises `DIDCommMessaging` **and** `TSPTransport` at its mediator, and a member
+takes the better of the two it is offered — TSP where present, DIDComm otherwise.
+
+Driven by the room's document rather than by what happens to work, and that distinction is
+the point. A mediator permits **one websocket per DID** and multiplexes both onto it — it
+sniffs the TSP magic byte on a binary frame — so a client that always spoke TSP would
+usually succeed, and would break against the first owner that served only DIDComm, with
+nothing in the room's document having changed to warn it. A second socket is not an
+alternative either: the mediator evicts one of the pair as a duplicate channel.
+
+The owner listens through the delivery layer's `DidCommTransport`, whose inbound stream
+surfaces both protocols tagged by which they arrived on, and answers on the one it was asked
+over. The ceremony is identical either way; only the packing differs, and one difference is
+worth naming: DIDComm carries `type` and `thid` around the message, while TSP has no headers
+at all, so over TSP the payload is `{ id, type, body }` and carries them itself.
+
+```
+cargo run --bin join-by-did -- did:peer:2.Vz6Mk…          # the advertised preference — TSP
+cargo run --bin join-by-did -- --tsp did:peer:2.Vz6Mk…    # force it, even if unadvertised
+```
 
 ### A member holds two identities, and they are not interchangeable
 

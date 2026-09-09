@@ -48,23 +48,45 @@ pub struct RoomIdentity {
     secrets: Vec<affinidi_secrets_resolver::secrets::Secret>,
 }
 
-/// The DIDComm service a room advertises: reach me through this mediator.
+/// The services a room advertises: reach me through this mediator, over either of these.
 ///
 /// `serviceEndpoint.uri` is the mediator's **DID**, not a URL — matching how the built-in
 /// `ai-agent` and `room` did:webvh templates advertise `DIDCommMessaging`. A client reads
 /// the mediator DID from here and dials through it, which is what lets every room on one
 /// mediator share a single connection rather than opening one apiece.
+///
+/// # Both, because a member must not have to guess
+///
+/// TSP is the higher-preference carrier and the mediator multiplexes it onto the same socket
+/// as DIDComm — but "it happens to work" is not an invitation. A member picks the best
+/// carrier the room *says* it serves, so a room that spoke TSP without advertising it would
+/// be relying on clients guessing right, and a room that stopped serving it would break them
+/// with nothing in its document having changed.
+///
+/// The `did:webvh` VTA templates make the same pair. The one place they differ is that
+/// `vta-service`'s test harness emits a URL for `#tsp` rather than the mediator DID, because
+/// embedding a mediator DID twice pushed its `did:peer` past the resolver's length limit.
+/// A room here is nowhere near that ceiling, so it uses the convention rather than the
+/// workaround.
 fn vta_peer_service(mediator_did: &str) -> Vec<affinidi_tdk::dids::PeerService> {
     use affinidi_tdk::dids::{OneOrMany, PeerService, PeerServiceEndpoint, PeerServiceEndpointLong};
-    vec![PeerService {
-        type_: "DIDCommMessaging".into(),
+
+    let at_mediator = |type_: &str, accept: Vec<String>| PeerService {
+        type_: type_.into(),
         endpoint: PeerServiceEndpoint::Long(OneOrMany::One(PeerServiceEndpointLong {
             uri: mediator_did.to_string(),
-            accept: vec!["didcomm/v2".into()],
+            accept,
             routing_keys: vec![],
         })),
         id: None,
-    }]
+    };
+
+    vec![
+        // `accept` names DIDComm's media types, and only DIDComm's. Asserting them on the
+        // TSP service would advertise something untrue.
+        at_mediator("DIDCommMessaging", vec!["didcomm/v2".into()]),
+        at_mediator("TSPTransport", vec![]),
+    ]
 }
 
 impl RoomIdentity {
@@ -350,11 +372,30 @@ mod tests {
             "the room's own identifier must name the mediator its owner listens on"
         );
 
+        // Both carriers, read back through the same lookup a member uses. A room that
+        // spoke TSP without advertising it would be relying on clients guessing right.
+        let advertised = dataroom_sample_room::advertised_mediator(&advertising.did)
+            .expect("a did:peer resolves")
+            .expect("a room with a mediator advertises one");
+        assert_eq!(advertised.mediator, mediator);
+        assert!(advertised.tsp, "a room must say it serves TSP to be asked over it");
+        assert!(advertised.didcomm, "and DIDComm, for a member that cannot do TSP");
+        assert_eq!(
+            advertised.preferred(),
+            Some("tsp"),
+            "TSP is the higher-preference carrier where both are offered"
+        );
+
         let silent = RoomIdentity::mint(None).unwrap();
         assert!(
             silent.did.starts_with("did:key:"),
             "with nowhere to advertise, a room is a key and nothing else: {}",
             silent.did
+        );
+        assert_eq!(
+            dataroom_sample_room::advertised_mediator(&silent.did).unwrap(),
+            None,
+            "a did:key has no service block, so there is nothing to read out of it"
         );
     }
 

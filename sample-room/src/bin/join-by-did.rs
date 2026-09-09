@@ -1,8 +1,14 @@
 //! Join a room knowing **nothing but its DID**.
 //!
 //! ```text
-//! cargo run --bin join-by-did -- did:peer:2.Vz6Mk…
+//! cargo run --bin join-by-did -- did:peer:2.Vz6Mk…          # over DIDComm
+//! cargo run --bin join-by-did -- --tsp did:peer:2.Vz6Mk…    # over TSP
 //! ```
+//!
+//! Both carriers reach the same owner on the same socket — a mediator permits one websocket
+//! per DID and multiplexes the two onto it. `--tsp` exists so the owner's TSP arm can be
+//! exercised without a browser, and so the two can be compared: the ceremony below does not
+//! change, only the packing.
 //!
 //! No host URL, no catalogue, no configuration. Everything else is derived:
 //!
@@ -28,6 +34,8 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use affinidi_messaging_core::{MessageTransport, Protocol};
+use affinidi_messaging_sdk::DidCommTransport;
 use affinidi_secrets_resolver::SecretsResolver as _;
 use affinidi_tdk::common::TDKSharedState;
 use affinidi_tdk::common::config::TDKConfig;
@@ -39,6 +47,7 @@ use affinidi_tdk::messaging::profiles::ATMProfile;
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD as B64;
 use dataroom_sample_room as wire;
+use futures_lite::StreamExt as _;
 
 /// How long to wait for the owner to answer before giving up.
 ///
@@ -49,17 +58,35 @@ const REPLY_TIMEOUT: Duration = Duration::from_secs(30);
 
 #[tokio::main]
 async fn main() -> Result<(), String> {
-    let room_did = std::env::args()
-        .nth(1)
-        .ok_or("usage: join-by-did <room did:peer>")?;
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let over_tsp = args.iter().any(|a| a == "--tsp");
+    let room_did = args
+        .iter()
+        .find(|a| !a.starts_with("--"))
+        .cloned()
+        .ok_or("usage: join-by-did [--tsp] <room did:peer>")?;
 
-    // 1. Where is this room's owner? The room's own identifier says so.
-    let mediator = wire::advertised_mediator(&room_did)?.ok_or_else(|| {
+    // 1. Where is this room's owner, and over what? The room's own identifier says both.
+    let advertised = wire::advertised_mediator(&room_did)?.ok_or_else(|| {
         format!(
-            "`{room_did}` advertises no DIDComm service, so there is nowhere to ask to join. \
-             A `did:key` room can be verified but not reached."
+            "`{room_did}` advertises no service, so there is nowhere to ask to join. A \
+             `did:key` room can be verified but not reached."
         )
     })?;
+    let mediator = advertised.mediator.clone();
+    // `--tsp` forces the carrier; without it, take the best one the room says it serves.
+    // Asking for a carrier a room does not advertise is allowed and is said out loud — it is
+    // how you find out whether an owner serves more than it admits to.
+    let carrier = if over_tsp {
+        if !advertised.tsp {
+            eprintln!("note: this room does not advertise TSP — asking over it anyway");
+        }
+        "tsp"
+    } else {
+        advertised.preferred().ok_or_else(|| {
+            format!("`{room_did}` advertises a mediator but no carrier this build speaks")
+        })?
+    };
     println!("room      {room_did}");
     println!("mediator  {mediator}");
 
@@ -76,7 +103,14 @@ async fn main() -> Result<(), String> {
     println!("room key  {}", member.did);
     println!("transport {transport_did}");
 
-    let client = Client::connect(&mediator, &transport_did, transport_secrets).await?;
+    println!(
+        "carrier   {}  (room advertises{}{})",
+        carrier,
+        if advertised.tsp { " TSP" } else { "" },
+        if advertised.didcomm { " DIDComm" } else { "" },
+    );
+    let client =
+        Client::connect(&mediator, &transport_did, transport_secrets, carrier == "tsp").await?;
 
     // 3. Ask.
     let request = member
@@ -342,12 +376,20 @@ fn room_verification_key(verification_method: &str) -> Result<Vec<u8>, String> {
         .map_err(|e| format!("`{verification_method}` public key: {e}"))
 }
 
-/// One DIDComm connection to a mediator, under the transport identity.
+/// One connection to a mediator, under the transport identity, carrying either protocol.
+///
+/// One socket for both, because that is all a mediator gives: it permits one websocket per
+/// DID and sniffs the TSP magic byte to route what arrives. The inbound side goes through
+/// the delivery layer's `DidCommTransport`, whose stream surfaces both tagged by protocol —
+/// the ATM's own pickup surfaces DIDComm only, and a client using it would wait forever for
+/// a TSP reply that had already arrived.
 struct Client {
     atm: Arc<ATM>,
     profile: Arc<ATMProfile>,
+    transport: DidCommTransport,
     transport_did: String,
     mediator_did: String,
+    over_tsp: bool,
 }
 
 impl Client {
@@ -355,6 +397,7 @@ impl Client {
         mediator_did: &str,
         transport_did: &str,
         secrets: Vec<affinidi_secrets_resolver::secrets::Secret>,
+        over_tsp: bool,
     ) -> Result<Self, String> {
         let tdk = TDKSharedState::new(
             TDKConfig::builder()
@@ -393,11 +436,17 @@ impl Client {
             .await
             .map_err(|e| format!("websocket: {e}"))?;
 
+        let transport = DidCommTransport::new((*atm).clone(), profile.clone())
+            .await
+            .map_err(|e| format!("bind the transport: {e}"))?;
+
         Ok(Self {
             atm,
             profile,
+            transport,
             transport_did: transport_did.to_string(),
             mediator_did: mediator_did.to_string(),
+            over_tsp,
         })
     }
 
@@ -413,13 +462,29 @@ impl Client {
         body: serde_json::Value,
     ) -> Result<(String, serde_json::Value), String> {
         let id = uuid::Uuid::new_v4().to_string();
-        let msg = Message::build(id.clone(), msg_type.to_string(), body)
+        if self.over_tsp {
+            self.send_tsp(room_did, &id, msg_type, body).await?;
+        } else {
+            self.send_didcomm(room_did, &id, msg_type, body).await?;
+        }
+        self.await_reply(room_did, &id).await
+    }
+
+    /// DIDComm: authcrypt to the room, then wrap in a `routing/2.0/forward` addressed to the
+    /// mediator, which unwraps it and queues the inner envelope for the room's pickup. Two
+    /// hops, because a mediator refuses direct delivery of inner messages.
+    async fn send_didcomm(
+        &self,
+        room_did: &str,
+        id: &str,
+        msg_type: &str,
+        body: serde_json::Value,
+    ) -> Result<(), String> {
+        let msg = Message::build(id.to_string(), msg_type.to_string(), body)
             .from(self.transport_did.clone())
             .to(room_did.to_string())
             .finalize();
 
-        // Two hops: authcrypt to the room, then wrap in a `routing/2.0/forward` addressed to
-        // the mediator, which queues the inner JWE for the room's pickup.
         let (inner, _) = self
             .atm
             .pack_encrypted(
@@ -436,7 +501,7 @@ impl Client {
                 &self.profile,
                 false,
                 &inner,
-                Some(&id),
+                Some(id),
                 &self.mediator_did,
                 room_did,
                 None,
@@ -444,42 +509,110 @@ impl Client {
                 false,
             )
             .await
-            .map_err(|e| format!("send the request: {e}"))?;
+            .map(|_| ())
+            .map_err(|e| format!("send the request: {e}"))
+    }
 
+    /// TSP: sealed end-to-end to the room and routed through the mediator, which carries it
+    /// without being able to read it.
+    ///
+    /// The envelope is `{ id, type, body }` in the payload, because TSP has no headers —
+    /// DIDComm supplies `type` and `thid` around the message, and over TSP the message has
+    /// to carry them itself. Same three fields either way, which is what lets the owner
+    /// hand both to one decision.
+    async fn send_tsp(
+        &self,
+        room_did: &str,
+        id: &str,
+        msg_type: &str,
+        body: serde_json::Value,
+    ) -> Result<(), String> {
+        let envelope = serde_json::json!({ "id": id, "type": msg_type, "body": body });
+        let bytes = serde_json::to_vec(&envelope).map_err(|e| e.to_string())?;
+        self.atm
+            .tsp()
+            .send_routed(
+                &self.profile,
+                &[self.mediator_did.clone(), room_did.to_string()],
+                &bytes,
+            )
+            .await
+            .map_err(|e| format!("send the TSP request: {e}"))
+    }
+
+    /// Wait for the reply threaded to `id`, on whichever protocol it comes back on.
+    async fn await_reply(
+        &self,
+        room_did: &str,
+        id: &str,
+    ) -> Result<(String, serde_json::Value), String> {
+        let mut inbound = self.transport.inbound();
         let deadline = tokio::time::Instant::now() + REPLY_TIMEOUT;
+
         loop {
-            if tokio::time::Instant::now() >= deadline {
+            let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+            if remaining.is_zero() {
                 return Err(format!(
                     "the owner of `{room_did}` did not answer within {}s — the room advertises \
                      this mediator, but nothing is listening there for it",
                     REPLY_TIMEOUT.as_secs()
                 ));
             }
-            let next = self
-                .atm
-                .message_pickup()
-                .live_stream_next(&self.profile, Some(Duration::from_millis(500)), true)
-                .await;
-            let Ok(Some((reply, _))) = next else {
+
+            let Ok(Some(frame)) = tokio::time::timeout(remaining, inbound.next()).await else {
                 continue;
             };
-            if reply.thid.as_deref() != Some(id.as_str()) {
+            let _ = self.transport.ack(frame.ack.clone()).await;
+
+            let Ok(envelope) =
+                serde_json::from_slice::<serde_json::Value>(&frame.message.payload)
+            else {
+                continue;
+            };
+
+            // DIDComm threads in the envelope's own `thid`; TSP has no header to thread it,
+            // so the reply carries one. Accept either, and never "the next frame" — the
+            // mediator's own status messages arrive on this socket too.
+            let threaded = frame
+                .thread_id
+                .clone()
+                .or_else(|| {
+                    envelope
+                        .get("thid")
+                        .and_then(|t| t.as_str())
+                        .map(str::to_string)
+                })
+                .unwrap_or_default();
+            if threaded != id {
                 continue;
             }
-            if reply.typ.contains("problem-report") {
-                let code = reply
-                    .body
-                    .get("code")
-                    .and_then(|c| c.as_str())
-                    .unwrap_or("(no code)");
-                let comment = reply
-                    .body
+
+            let typ = envelope
+                .get("type")
+                .and_then(|t| t.as_str())
+                .unwrap_or_default()
+                .to_string();
+            let body = envelope
+                .get("body")
+                .cloned()
+                .unwrap_or(serde_json::Value::Null);
+
+            if typ.contains("problem-report") {
+                let code = body.get("code").and_then(|c| c.as_str()).unwrap_or("(no code)");
+                let comment = body
                     .get("comment")
                     .and_then(|c| c.as_str())
                     .unwrap_or("(no comment)");
                 return Err(format!("the owner refused [{code}]: {comment}"));
             }
-            return Ok((reply.typ, reply.body));
+
+            // Said out loud, because a reply arriving on the other protocol from the one the
+            // request went out on is exactly the kind of thing worth noticing rather than
+            // silently accepting.
+            if matches!(frame.message.protocol, Protocol::TSP) != self.over_tsp {
+                eprintln!("note: the reply came back on the other protocol");
+            }
+            return Ok((typ, body));
         }
     }
 }

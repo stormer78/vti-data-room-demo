@@ -166,7 +166,7 @@
 import init, { mintKeyPackage, verifyInvitation, Identity, RoomMember } from "./vendor/vti_rooms.js";
 import {
   ADMITTED, INVITATION, OwnerConnection, REQUEST_ADMISSION, REQUEST_INVITATION,
-  advertisedMediator, mintTransportIdentity, signedRequest,
+  advertisedMediator, mintTransportIdentity, preferredCarrier, signedRequest,
 } from "./admission.js";
 
 // The module is ~1.9 MB and every handler below depends on it, so the buttons stay
@@ -422,22 +422,29 @@ async function joinByDid(roomDid) {
   const mine = [];
   let connection = null;
   try {
-    const mediator = advertisedMediator(roomDid);
-    if (!mediator) {
+    const advertised = advertisedMediator(roomDid);
+    if (!advertised) {
       log(`${roomDid} advertises no mediator, so there is nowhere to ask to join. A `
         + `did:key room can be verified but not reached — only a method with a service `
         + `block can say where its owner listens.`);
       return;
     }
-    mine.push(`resolved the room — it listens at ${mediator}`);
+    // The room's own document decides the carrier — TSP where it is offered, DIDComm
+    // otherwise. Not "whatever works": a mediator carries both on one socket, so guessing
+    // TSP would usually succeed and would break against an owner that only serves DIDComm,
+    // with nothing in the room's document having changed to warn you.
+    const carrier = preferredCarrier(advertised);
+    mine.push(`resolved the room — it listens at ${advertised.mediator}, over `
+      + `${[advertised.tsp && "TSP", advertised.didcomm && "DIDComm"].filter(Boolean).join(" and ")}`);
 
     // Disposable, and minted per join. It is a routing address; nothing is issued to it.
     log("opening a connection to the room's mediator…");
     const transport = mintTransportIdentity();
     mine.push(`transport identity minted — ${transport.identity.did.slice(0, 32)}…`);
 
-    connection = await OwnerConnection.open(roomDid, transport);
-    mine.push("connected — this browser is now reachable at that mediator");
+    connection = await OwnerConnection.open(roomDid, transport, carrier);
+    mine.push(`connected over ${carrier === "tsp" ? "TSP" : "DIDComm"} — one socket, which `
+      + `is all a mediator gives per DID`);
 
     // 1 · Ask. Signed by the room key in wasm, naming the transport identity, so the owner
     //     can bind what was signed to the connection it arrived on.
@@ -447,7 +454,7 @@ async function joinByDid(roomDid) {
     if (reply.type !== INVITATION) throw new Error(`expected an invitation, got ${reply.type}`);
     const invitation = reply.body.invitation;
     const vic = JSON.stringify(invitation);
-    mine.push("invitation received over DIDComm — from the room, not from this site");
+    mine.push("invitation received — from the room, not from this site");
 
     // 2 · Check it before acting on it. The same six clauses, in the same wasm.
     const credentialId = verifyInvitation(vic, roomDid, me.did, spent());
@@ -493,7 +500,7 @@ async function joinByDid(roomDid) {
     }
 
     $("steps").innerHTML =
-        `<li class="who">the owner, over DIDComm</li>` + out.steps.map(s => `<li>${s}</li>`).join("")
+        `<li class="who">the owner, over ${carrier === "tsp" ? "TSP" : "DIDComm"}</li>` + out.steps.map(s => `<li>${s}</li>`).join("")
       + `<li class="who">this browser</li>` + mine.map(s => `<li>${s}</li>`).join("");
     $("join-panel").classList.remove("hide");
     showEpochs();

@@ -34,6 +34,17 @@ affinidi-tdk = "0.12"
 affinidi-did-resolver-traits = "0.1"
 affinidi-did-common = "0.4"
 affinidi-secrets-resolver = "0.5"
+# **Directly, and only for `tsp`.** The TDK re-exports this SDK, but its own `tsp` feature
+# enables the TSP crate without forwarding `affinidi-messaging-sdk/tsp` — and without that
+# the transport's inbound stream drops every TSP frame, with a log line and nothing else.
+# Named here so cargo's feature unification turns it on for the copy the TDK uses too. Same
+# version the TDK resolves, so there is one SDK in the build and not two.
+affinidi-messaging-sdk = { version = "0.22", features = ["tsp"] }
+# The transport-neutral shapes the delivery layer speaks: `Inbound`, `Protocol`,
+# `MessageTransport`. What lets one loop serve both carriers rather than two loops that
+# drift.
+affinidi-messaging-core = "0.1"
+futures-lite = "2"
 dtg-credentials = "0.9.1"
 affinidi-data-integrity = "0.7"
 reqwest = { version = "0.13", features = ["json"] }
