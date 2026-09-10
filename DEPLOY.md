@@ -112,6 +112,35 @@ short enough to embed**. A `did:peer:2` carries its services inside the identifi
 `did:peer` mediator does not fit under the 1000-byte resolver limit. A `did:webvh` leaves
 plenty of room. The host names the limit and stops.
 
+### Or give the host a VTA identity
+
+The host above mints its own `did:peer:2`. For a deployment, prefer an identity the VTA holds:
+its keys can be rotated and its DID outlives the process, neither of which a `did:peer` can do
+— the identifier encodes the keys, so the controller can never change.
+
+```
+room-host --data-dir /var/lib/room-host \
+          --listen 127.0.0.1:8300 \
+          --mediator-did did:webvh:…:mediator \
+          --vta-did did:webvh:…:agent \
+          --vta-context rooms \
+          --secrets /etc/room-host/secrets.toml
+```
+
+Built with `--features didcomm,onboarding`. The first start prints a throwaway `did:key` and
+**exits**; grant it `application` on the context (`pnm acl create --did … --role application
+--contexts rooms`) and start it again. It then fetches the context's DID and keys and serves
+as that. GUIDE §4a is the walkthrough, including minting the context's DID first.
+
+Two operational notes:
+
+- **`--secrets` matters more here.** The cached VTA identity is kept in the same store as a
+  self-minted one, so without a `[secrets]` table it is a cleartext file on whatever volume
+  the container was given. The host warns once at startup.
+- **A VTA outage does not stop the host.** It comes up on the cached identity and logs that it
+  did. Losing every host when the VTA blinks would be a far larger blast radius than the
+  outage, for a process that only stores ciphertext.
+
 ### Or point at a VTC instead
 
 A VTC serves the same `rooms/*` surface over the same carriers, and the site cannot tell the

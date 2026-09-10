@@ -167,6 +167,17 @@ await fetch("http://127.0.0.1:8300/trust-tasks", {method: "POST"})   // TypeErro
 `--features didcomm` is a **cargo** flag and off by default. A host that is not asked to be
 reachable opens no socket and mints no identity.
 
+### The host's identity, and where it comes from
+
+The host above **mints its own** `did:peer:2` and keeps it under `--data-dir`. That is the
+right thing for a laptop: the identifier encodes both its keys and its mediator, so
+`?at=<did>` is a complete address a member resolves by computation, with nothing to look up.
+
+It is the wrong thing for a room a VTA governs, for one reason: a `did:peer` encodes its keys
+in the identifier, so its controller can never change. A host that cannot rotate a key or hand
+itself over is a host you can never recover. §4a is the other way round — the VTA holds the
+identity and this host fetches it.
+
 ### Without a browser
 
 The same ceremony, and the reference implementation both sides were written against:
@@ -182,6 +193,95 @@ the room and opens what comes back. No URL anywhere in the run. `--tsp` forces T
 a room does not advertise it.
 
 ---
+
+## 4a. A host a VTA governs
+
+Everything above runs a host that answers to nobody: it mints its own identity and serves
+whatever rooms present valid credentials. That is the whole point of the design — a host
+authorises against the room's credentials, not against anything it stores — and it is why the
+demo works with no VTA at all.
+
+A deployment usually wants the other arrangement: the host has an identity **the VTA holds**,
+in a context an operator controls, so its keys can be rotated and its DID can outlive it.
+Three steps, and the order matters.
+
+### 1. Give the context a DID
+
+This is the step nobody guesses, and the one the room-creation form does not explain: it asks
+for a HOST DID without saying where one comes from. It comes from your VTA.
+
+From the wallet extension, on the **New room** form, press **Mint one** beside HOST DID. It
+mints with the `room-host` template — a DIDComm service at your mediator and a REST service at
+the host's URL — and fills the field in.
+
+Or from a terminal:
+
+```
+pnm did-mgmt dids create --context rooms --server <SERVER_ID> \
+        --label "room host" --mediator-service
+```
+
+`--server` is a DID-hosting server you have registered (`pnm did-mgmt servers list`). Add
+`--path <name>` to choose the name it is published under; omit it and the server assigns one.
+`--mediator-service` is not optional in practice: members reach a host by resolving its DID,
+so a host DID that advertises no service block is one nobody can dial.
+
+### 2. Enrol the host, and grant it
+
+```
+cargo run -p room-host --features didcomm,onboarding -- \
+  --data-dir /tmp/room-host-data \
+  --listen 127.0.0.1:8300 \
+  --mediator-did did:webvh:…:mediator \
+  --vta-did did:webvh:…:agent \
+  --vta-context rooms
+```
+
+The first run **stops**, and prints a throwaway `did:key` with the command to authorize it.
+That stop is deliberate: a host that cannot be authorized for anything the VTA governs has
+nothing to serve, and starting anyway would look like it was working.
+
+Grant it, using the line it printed:
+
+```
+pnm acl create --did did:key:z6Mk… --role application --contexts rooms
+```
+
+**`application`, not admin.** A host holds ciphertext it cannot read and no room keys, so it
+needs to act in the context and needs no authority over it. That grant is also exactly what
+lets it read its own keys and nothing else.
+
+### 3. Start it again
+
+```
+# same command as step 2
+# → host DID: did:webvh:…:rooms:host      ← the VTA's DID, not one it minted
+```
+
+The throwaway is rotated away on that first successful connect, so a DID that travelled
+through a chat window does not stay live. Then the host fetches the context's DID and its keys
+and serves as that.
+
+Use that DID as the HOST DID when you create the room, and as `?at=` in the site.
+
+### What happens when the VTA is down
+
+The host caches the identity it fetched and comes up on it, logging that it did. Without that,
+a VTA outage would stop every host enrolled with it — a far larger blast radius than the
+outage itself, for a process that is only storing ciphertext.
+
+### If the context has no DID
+
+You will see this, and it means step 1 was skipped:
+
+```
+Context `rooms` on did:webvh:…:agent has no DID, so there is no identity for this host
+to serve as.
+```
+
+It prints the command to fix it. The host does not create one for itself: it enrols with an
+`application` role, and minting a DID in a context needs an admin — deliberately, because
+letting a host mint identities in your context is more authority than the job needs.
 
 ## 5. Fronting a real room — a standalone host, or a VTC
 
@@ -246,6 +346,19 @@ where anybody listens.
 **A record lists but will not open** — you are behind. Every membership change advances the
 epoch, and a member who missed a commit can open nothing sealed after it. The site catches up
 on open; if it cannot reach the owner, it cannot. This failure reads as corruption and is not.
+
+**The host prints a throwaway DID and stops** — it is enrolled with a VTA (`--vta-did`) and
+waiting to be authorized. That is not a failure; it is the one step that cannot be automated,
+because it is a person deciding this host may act in their context. Run the `pnm acl create`
+line it printed, then start it again. See §4a.
+
+**"Context `…` has no DID, so there is no identity for this host to serve as"** — the context
+exists and the host is granted on it, but nobody has minted a DID for it. §4a step 1, or the
+**Mint one** button beside HOST DID in the wallet's New room form.
+
+**The host serves a `did:peer` when you expected a `did:webvh`** — it was started without
+`--vta-did`, or without the `onboarding` cargo feature, so it minted its own identity rather
+than fetching the VTA's. Both are needed: `--features didcomm,onboarding`.
 
 **The host refuses to start, naming a 1000-byte limit** — its mediator's DID is too long to
 embed. A `did:peer:2` carries its services inside the identifier, so a `did:peer` mediator
