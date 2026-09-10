@@ -194,8 +194,17 @@ and the site cannot tell the difference from the sample's.
 **A VTC data room** works the same way, and needs nothing from this repository. A VTC serves
 the whole `rooms/*` family — `records/{put,get,list,curate}`, `epoch/chain`, `create`,
 `owner/{claim,transfer}` — through the same dispatch spine and the same delivery layer, over
-REST, DIDComm **and** TSP. `room-host` is the reference implementation extracted from that
-code, which is why a client written against one works against the other.
+REST, DIDComm **and** TSP.
+
+The two hosts agree by construction rather than by care: both build every response through the
+same `vti_rooms::wire` constructors, and those types are checked against their schemas in
+`vti-rooms/tests/schema_conformance.rs`. They cannot drift about a record's shape without the
+shared type changing under both.
+
+Which is exactly why the one place they *did* disagree was the one place no shared type
+reached — how a TSP reply is framed, where each host wrote its own send path. `room-host`
+wrapped the document; the VTC sent it bare. That is fixed, and the bare document is the wire
+form ([VTI #1383](https://github.com/OpenVTC/verifiable-trust-infrastructure/pull/1383)).
 
 So:
 
