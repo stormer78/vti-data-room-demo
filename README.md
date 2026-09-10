@@ -132,7 +132,8 @@ and bound to the connection that carried it.
 ## Running it
 
 **[GUIDE.md](GUIDE.md) is the walkthrough** — what to type, what to click, how to set up your
-own room, and what to look at while you do. This section is the short form.
+own room, and what to look at while you do. **[DEPLOY.md](DEPLOY.md)** is for putting it
+behind a load balancer. This section is the short form.
 
 Two modes. The first is the smaller thing to stand up; the second is the one the design is
 about.

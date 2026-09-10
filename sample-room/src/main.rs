@@ -437,8 +437,12 @@ async fn main() {
         .fallback_service(tower_http::services::ServeDir::new(&web))
         .with_state(rooms);
 
-    let addr = "127.0.0.1:8787";
-    let listener = tokio::net::TcpListener::bind(addr)
+    // Loopback by default, because a demo minting keys should not appear on a network by
+    // accident. Behind a load balancer set `LISTEN=0.0.0.0:8787` — a process bound to
+    // loopback inside a container is unreachable from the balancer, and the symptom is a
+    // health check that never passes rather than an error this process could print.
+    let addr = std::env::var("LISTEN").unwrap_or_else(|_| "127.0.0.1:8787".to_string());
+    let listener = tokio::net::TcpListener::bind(&addr)
         .await
         .expect("bind the demo port");
     println!("data-room demo on http://{addr}  (serving {web})");

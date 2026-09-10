@@ -556,7 +556,7 @@ function showEpochs() {
   const held = S.get(key("room:" + currentRoomDid)) ?? {};
   $("room-link").textContent =
     `${location.origin}/#/room/${encodeURIComponent(currentRoomDid)}`
-    + `?at=${encodeURIComponent(held.host ?? SAMPLE_HOST)}`;
+    + (held.host ? `?at=${encodeURIComponent(held.host)}` : "");
   $("epoch").firstChild.textContent = member.epoch;
   $("earliest").firstChild.textContent = member.earliestReadableEpoch();
 }
@@ -576,7 +576,20 @@ function showEpochs() {
 
 /// Where the sample room's host is. A *default*, not a constant: a room carries its own
 /// host, and this is only what the catalogue's rooms happen to use.
-const SAMPLE_HOST = "http://127.0.0.1:8300";
+/// Where to look for a room's host when nobody has said.
+///
+/// Nobody usually has to: a listed room carries its host in the catalogue, and an addressed
+/// one carries it in `?at=`. This is only the gap between them.
+///
+/// **Only on loopback.** A hardcoded `http://127.0.0.1:8300` used to be the fallback
+/// everywhere, which is wrong the moment this page is served over TLS: the browser blocks a
+/// plaintext request from an https origin as mixed content, and the error names the content
+/// policy rather than the missing address. Off loopback there is no sensible guess, so the
+/// site says what it needs instead of guessing wrongly.
+const SAMPLE_HOST =
+  location.hostname === "127.0.0.1" || location.hostname === "localhost"
+    ? "http://127.0.0.1:8300"
+    : null;
 
 /// A room is addressed, never configured.
 ///
@@ -594,7 +607,7 @@ function roomFromUrl() {
   const m = location.hash.match(/^#\/room\/([^?]+)(?:\?(.*))?$/);
   if (!m) return null;
   const params = new URLSearchParams(m[2] ?? "");
-  return { roomDid: decodeURIComponent(m[1]), host: params.get("at") ?? SAMPLE_HOST };
+  return { roomDid: decodeURIComponent(m[1]), host: params.get("at") ?? SAMPLE_HOST ?? null };
 }
 
 /// Send one Trust Task to the host, signed, carrying a presentation for `action`.
@@ -634,6 +647,13 @@ async function hostTask(type, action, payload) {
   // that confers nothing. Which is why this is one signature and two ways to post it, rather
   // than two request paths.
   const where = held.host ?? SAMPLE_HOST;
+  if (!where) {
+    throw new Error(
+      "nothing has said where this room's records live — a room's identifier deliberately "
+        + "does not name a host, so the catalogue or the link has to. Add `?at=<host did or "
+        + "url>` to the address.",
+    );
+  }
   const answer = where.startsWith("did:")
     ? await hostOverMediator(where, JSON.parse(signed))
     : await hostOverHttp(where, signed);
