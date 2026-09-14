@@ -101,6 +101,22 @@ reachable opens no socket and mints no identity.
 **No ingress, and no `--allow-origin`.** Members reach it through the mediator. The `--listen`
 port is for you — health checks and anything local — and can stay on loopback.
 
+**Health check, and what it does not tell you.** The host serves exactly two routes:
+`POST /trust-tasks` and `GET /health`, the latter returning `ok`. `/health` is a static
+answer — it reports that the process is listening and nothing else. In particular **it stays
+`200` while the mediator leg is dead**, which is the state that matters: the mediator
+connection runs in a spawned task, and if it ends, the listener carries on, the balancer keeps
+the target in service, and every member addressing this host by DID times out. Watch the log
+for `the mediator connection ended` and restart; there is no endpoint that reports it.
+
+**In mediator mode you need no balancer at all.** The host dials out; nothing dials in. If you
+are running one anyway — for `/health`, or because something else shares the listener — then
+do not advertise it in the host's DID document unless you mean it: a `VTARest` service entry
+promises a REST endpoint, and a browser member will only be able to use it if the host also
+runs with `--allow-origin <your site>` **and** the certificate actually covers the hostname.
+A wildcard cert matches one label, so `*.example.com` does **not** cover
+`host.rooms.example.com`, and the browser refuses before any of this is reached.
+
 `--data-dir` **must be durable**. It holds the records *and* `host-identity.json`, which is
 the DID members have saved. Lose it and every saved address points at a host that no longer
 exists; the failure presents as a timeout, which reads as "the host is down" rather than "the
