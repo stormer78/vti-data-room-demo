@@ -167,6 +167,11 @@ await fetch("http://127.0.0.1:8300/trust-tasks", {method: "POST"})   // TypeErro
 `--features didcomm` is a **cargo** flag and off by default. A host that is not asked to be
 reachable opens no socket and mints no identity.
 
+`--listen` follows the same rule and is opt-in: the command above keeps it so that `/health`
+and the console are reachable locally, but a host given only `--mediator-did` binds **no port
+at all**, which is the arrangement a deployment wants. It then exits if the mediator
+connection ends, rather than staying up with nothing served.
+
 ### The host's identity, and where it comes from
 
 The host above **mints its own** `did:peer:2` and keeps it under `--data-dir`. That is the

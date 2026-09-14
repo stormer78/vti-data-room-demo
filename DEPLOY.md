@@ -98,8 +98,11 @@ room-host \
 Built with `--features didcomm`; it is off by default, so a host that is not asked to be
 reachable opens no socket and mints no identity.
 
-**No ingress, and no `--allow-origin`.** Members reach it through the mediator. The `--listen`
-port is for you — health checks and anything local — and can stay on loopback.
+**No ingress, and no `--allow-origin`.** Members reach it through the mediator. Better still,
+**omit `--listen` entirely**: it is opt-in, and a host given only `--mediator-did` binds no
+port at all (`lsof` shows zero listening sockets) and exits if the mediator connection ends,
+rather than staying up with nothing served. Pass it only when something local genuinely needs
+`/health`, and keep it on loopback when you do.
 
 **Health check, and what it does not tell you.** The host serves exactly two routes:
 `POST /trust-tasks` and `GET /health`, the latter returning `ok`. `/health` is a static
