@@ -217,25 +217,92 @@ the host's URL — and fills the field in.
 Or from a terminal:
 
 ```
-pnm did-mgmt dids create --context rooms --server <SERVER_ID> \
-        --label "room host" --mediator-service
+pnm did-mgmt dids create --context rooms --server <SERVER_ID> --label "room host"
 ```
 
 `--server` is a DID-hosting server you have registered (`pnm did-mgmt servers list`). Add
 `--path <name>` to choose the name it is published under; omit it and the server assigns one.
-`--mediator-service` is not optional in practice: members reach a host by resolving its DID,
-so a host DID that advertises no service block is one nobody can dial.
+
+**Then check what it published**, because a host DID that advertises no service block is one
+nobody can dial, and older guidance here named a `--mediator-service` flag that `pnm` 0.16.3
+does not have:
+
+```
+pnm did-mgmt dids get --did <the new DID> --full-display
+```
+
+It needs a `DIDCommMessaging` service whose endpoint URI is your **mediator's DID**. If it has
+none, add one with `pnm did-mgmt dids edit --did <did> --document <file>`. Add a `TSPTransport`
+entry beside it, pointing at the same mediator, if you want members to choose TSP — the site
+takes TSP when it is advertised and DIDComm otherwise, so a host that serves both while
+advertising only one will only ever be spoken to over the one.
+
+**Check the key ids too, and check them against the VTA's own records:**
+
+```
+pnm keys list --json | jq '.[] | select(.contextId=="rooms") | {keyId, keyType}'
+```
+
+Every `keyId` must be exactly the verification-method id in the published document —
+`{did}#key-N`, same N. A DID whose document numbers its methods from `#key-1` while the VTA
+derived its keys as `#key-0` is **off by one**, and nothing says so until the host tries to
+connect to the mediator, which fails with
+
+```
+Error authenticating: DIDComm("sender has no usable key agreement key")
+```
+
+and then retries forever. The secrets are fetched by kid: the host is handed `#key-0`/`#key-1`,
+the mediator resolves the document and wants the secret for `keyAgreement` = `#key-2`, and
+there is none. `pnm keys rename <old> <new>` fixes it — rename the **key-agreement key first**,
+or the second rename collides with a record that still exists. Renaming the records rather than
+republishing the document is the safer direction: anyone who has already resolved the DID has
+the document's ids cached.
 
 ### 2. Enrol the host, and grant it
 
 ```
-cargo run -p room-host --features didcomm,onboarding -- \
-  --data-dir /tmp/room-host-data \
+cargo build --release -p room-host \
+  --features didcomm,onboarding,config-session,tsp
+
+target/release/room-host \
+  --data-dir /var/lib/room-host \
   --listen 127.0.0.1:8300 \
   --mediator-did did:webvh:…:mediator \
   --vta-did did:webvh:…:agent \
   --vta-context rooms
 ```
+
+**Four features, and each one is load-bearing.** `--features didcomm,onboarding` alone
+compiles and then dies at the first session read, which is the worst of both:
+
+| feature | without it |
+|---|---|
+| `didcomm` | no mediator socket, no identity — the host is HTTP-only |
+| `onboarding` | `--vta-did` does nothing; the host mints its own `did:peer` |
+| **a session store** | `cannot store session — this build has no session store compiled in` |
+| **`tsp`** | enrolment against a VTA that advertises TSP fails outright — see below |
+
+The session store is `config-session` (a file at mode 0600 under `--data-dir`) or
+`session-keyring` (the OS keyring). Prefer `config-session` anywhere headless: a container has
+no keyring. `VTI_SECURE_STORE=file` forces the file backend on a build that has neither.
+
+**`tsp` is not optional against a VTA that advertises it**, and the failure is worth
+understanding because it looks intermittent. A session waiting to rotate picks its transport
+in `vta_sdk::session::rotation_endpoint`, whose TSP arm is matched first and taken
+unconditionally; a build without the feature then fails with
+
+```
+VTA '…' advertises TSP, but this build of the SDK/CLI was compiled without the `tsp`
+feature, so it cannot connect over it.
+```
+
+and there is no fallback on that path. Every *later* connect takes the ordinary path, which
+falls back to DIDComm with a warning. So the one connect that cannot fall back is the first
+one — the enrolment you are doing right now.
+
+**Build `--release`.** In a debug build the VTA path trips a `debug_assert` in the SDK's
+session leak guard and panics on a perfectly successful fetch.
 
 The first run **stops**, and prints a throwaway `did:key` with the command to authorize it.
 That stop is deliberate: a host that cannot be authorized for anything the VTA governs has
@@ -263,6 +330,27 @@ through a chat window does not stay live. Then the host fetches the context's DI
 and serves as that.
 
 Use that DID as the HOST DID when you create the room, and as `?at=` in the site.
+
+### Where this host's keys live
+
+Two stores, and they are **not** the same one. Confusing them is the reason an operator ends
+up reading an AWS error while the actual failure is somewhere else entirely.
+
+| | holds | selected by |
+|---|---|---|
+| **secrets store** | the identity this host serves as — the keys it was handed by the VTA, and the cache of them | `--secrets <file>`, a `[secrets]` table |
+| **session store** | the private key this host authenticates to the **VTA** with | a cargo feature: `config-session` or `session-keyring` |
+
+With no `--secrets` the identity is a cleartext file under `--data-dir`, and the host says so
+once at startup. That is right for a laptop and not for anything else —
+[DEPLOY.md](DEPLOY.md#secret-stores) has the backends, including AWS, GCP, Azure, Vault and
+Kubernetes, and what each one needs.
+
+**There is no AWS backend for the *session* store.** `vta-sdk` compiles `keyring`,
+`azure-secrets` or `config-session` and nothing else, so on AWS the session key lives in a
+file at mode 0600 under `--data-dir` while the identity lives in Secrets Manager. Encrypt that
+volume, and keep it: the session is keyed to the data dir, so a host that restarts on empty
+storage mints a **new** throwaway and needs a **new** grant.
 
 ### What happens when the VTA is down
 
@@ -367,3 +455,30 @@ does not fit. Use one with a short DID; a `did:webvh` leaves plenty of room.
 **The browser cannot reach the host** — if you are running the HTTP mode, the host needs
 `--allow-origin http://127.0.0.1:8787`. If you are running the mediator mode, it is not
 supposed to, and records should work anyway.
+
+**`cannot store session — this build has no session store compiled in`** — `--features
+didcomm,onboarding` without one of `config-session` or `session-keyring`. Add
+`config-session`; or set `VTI_SECURE_STORE=file` to accept a plaintext file at mode 0600 on a
+build that has neither.
+
+**`keyring entry error: No default store has been set`** — `session-keyring` on a build whose
+binary never installed a platform store, and on a headless server there is no keyring to
+install anyway. Use `config-session`.
+
+**`advertises TSP, but this build of the SDK/CLI was compiled without the `tsp` feature`** —
+add `tsp` to the cargo features. This bites on the **first** connect only: a session waiting
+to rotate takes the TSP arm unconditionally and cannot fall back, while every later connect
+falls back to DIDComm with a warning. So it reads as intermittent and is not.
+
+**`DIDComm session for … dropped without shutdown()`, and a panic** — a debug build. The
+leak guard is a `debug_assert`. Build `--release`.
+
+**`sender has no usable key agreement key`, retrying forever** — the VTA's key ids and the
+published DID document disagree; §4a step 1 has the check and the fix. The host keeps serving
+HTTP throughout, so a health check on `--listen` still passes while nothing can reach it
+by DID.
+
+**An error about the secret store when you expected one about the VTA** — the secrets store is
+only read as a *fallback*, after the VTA could not be reached. Older builds printed the
+fallback's failure and dropped the real one; if you are on such a build, run once without
+`--secrets` and the underlying error is printed instead.

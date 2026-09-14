@@ -101,6 +101,22 @@ reachable opens no socket and mints no identity.
 **No ingress, and no `--allow-origin`.** Members reach it through the mediator. The `--listen`
 port is for you — health checks and anything local — and can stay on loopback.
 
+**Health check, and what it does not tell you.** The host serves exactly two routes:
+`POST /trust-tasks` and `GET /health`, the latter returning `ok`. `/health` is a static
+answer — it reports that the process is listening and nothing else. In particular **it stays
+`200` while the mediator leg is dead**, which is the state that matters: the mediator
+connection runs in a spawned task, and if it ends, the listener carries on, the balancer keeps
+the target in service, and every member addressing this host by DID times out. Watch the log
+for `the mediator connection ended` and restart; there is no endpoint that reports it.
+
+**In mediator mode you need no balancer at all.** The host dials out; nothing dials in. If you
+are running one anyway — for `/health`, or because something else shares the listener — then
+do not advertise it in the host's DID document unless you mean it: a `VTARest` service entry
+promises a REST endpoint, and a browser member will only be able to use it if the host also
+runs with `--allow-origin <your site>` **and** the certificate actually covers the hostname.
+A wildcard cert matches one label, so `*.example.com` does **not** cover
+`host.rooms.example.com`, and the browser refuses before any of this is reached.
+
 `--data-dir` **must be durable**. It holds the records *and* `host-identity.json`, which is
 the DID members have saved. Lose it and every saved address points at a host that no longer
 exists; the failure presents as a timeout, which reads as "the host is down" rather than "the
@@ -127,10 +143,23 @@ room-host --data-dir /var/lib/room-host \
           --secrets /etc/room-host/secrets.toml
 ```
 
-Built with `--features didcomm,onboarding`. The first start prints a throwaway `did:key` and
-**exits**; grant it `application` on the context (`pnm acl create --did … --role application
---contexts rooms`) and start it again. It then fetches the context's DID and keys and serves
-as that. GUIDE §4a is the walkthrough, including minting the context's DID first.
+Built with **`--features didcomm,onboarding,config-session,tsp`**, and `--release`. Each of
+the four is load-bearing and the two easy to miss fail late:
+
+- **a session store** (`config-session`, or `session-keyring` where there is a keyring) —
+  without one the build compiles and dies at the first session read.
+- **`tsp`** — without it, enrolling against a VTA that advertises TSP fails on the *first*
+  connect, the one that cannot fall back to DIDComm.
+
+`--release` because the VTA path trips a `debug_assert` in the SDK's session leak guard and
+panics in a debug build.
+
+The first start prints a throwaway `did:key` and **exits**; grant it `application` on the
+context (`pnm acl create --did … --role application --contexts rooms`) and start it again. It
+then fetches the context's DID and keys and serves as that. GUIDE §4a is the walkthrough,
+including minting the context's DID first — and checking that the VTA's key ids match the ids
+in the published DID document, which is the failure that presents as `sender has no usable key
+agreement key` and retries forever.
 
 Two operational notes:
 
@@ -140,6 +169,63 @@ Two operational notes:
 - **A VTA outage does not stop the host.** It comes up on the cached identity and logs that it
   did. Losing every host when the VTA blinks would be a far larger blast radius than the
   outage, for a process that only stores ciphertext.
+
+### Secret stores
+
+`--secrets` takes a TOML file with a `[secrets]` table, in the same shape the VTA and the VTC
+take. It holds **the host's identity**: the keys it serves as, and the cached copy of what the
+VTA handed it.
+
+```toml
+[secrets]
+backend = "aws"
+aws_secret_name = "room-host/rooms/identity"
+aws_region = "us-east-1"        # else the default provider chain
+# cache_ttl_secs = 60           # default; 0 disables caching
+```
+
+`backend` is explicit and wins outright. Omit it and the backend is inferred from whichever
+selector field is set, which cannot reach `plaintext` on a build with `keyring` compiled in.
+
+| `backend` | cargo feature | required fields |
+|---|---|---|
+| `aws` | `aws-secrets` | `aws_secret_name`, optional `aws_region` |
+| `gcp` | `gcp-secrets` | `gcp_project`, `gcp_secret_name` |
+| `azure` | `azure-secrets` | `azure_vault_url`, `azure_secret_name` |
+| `vault` | `vault-secrets` | `vault_addr`, `vault_secret_path` |
+| `kubernetes` | `k8s-secrets` | `k8s_secret_name`, `k8s_namespace` |
+| `keyring` | `keyring` | — (`keyring_service` to run two hosts on one machine) |
+| `config_seed` | `config-secret` | `seed` |
+| `plaintext` | — | `allow_plaintext = true` |
+
+A backend named but not compiled in is a startup error naming the feature, not a silent
+fallback.
+
+**AWS, specifically.** The seed store keeps a hex-encoded value and nothing else, so a secret
+you pre-created in the console with a placeholder fails as `failed to decode hex seed from
+AWS: Odd number of digits`. It is harmless — the first successful fetch overwrites it with
+`PutSecretValue` — but it is not what the error sounds like.
+
+IAM needs `secretsmanager:GetSecretValue` and `secretsmanager:PutSecretValue`, plus
+`secretsmanager:CreateSecret` unless you pre-create the secret, and `kms:Decrypt` (and
+`kms:GenerateDataKey` for writes) on a customer-managed key. Scope it to a name pattern rather
+than a full ARN — `arn:aws:secretsmanager:REGION:ACCOUNT:secret:room-host/*` — because the
+six-character suffix AWS appends changes if the secret is ever deleted and recreated, and the
+policy then silently stops matching.
+
+Every key-touching read is one `GetSecretValue`, which is one billed KMS `Decrypt`.
+`cache_ttl_secs` defaults to 60, making that per-minute rather than per-request. Leave it.
+
+**The session store is a different store, and has no AWS backend.** `vta-sdk` compiles
+`keyring`, `azure-secrets` or `config-session`, so on AWS the key this host authenticates to
+the VTA with lives in a file at mode 0600 under `--data-dir` while its identity lives in
+Secrets Manager. Two consequences worth planning for:
+
+- **Encrypt and keep that volume.** It holds a live credential — after the first connect the
+  throwaway has rotated and the file holds the key that acts as `application` in your context.
+- **The session is keyed to `--data-dir`, not to the cloud.** A task that comes up on empty
+  storage mints a new throwaway and needs a new `pnm acl create`. Plan the volume, or plan to
+  grant on every replacement.
 
 ### Or point at a VTC instead
 
