@@ -1,890 +1,539 @@
 <!doctype html>
+<html lang="en">
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Data rooms — demo</title>
+<title>Data Rooms Demo</title>
+<link rel="icon" href="data:,">
 <style>
+  /* Design language from the VTC default landing page (vtc-service/website-default/site.css):
+     indigo brand, Inter-style stack, light-dark() surfaces, soft gradient wash, pill buttons. */
   :root {
-    --bg: #fbfaf8; --panel: #fff; --ink: #17181a; --muted: #6a6d73;
-    --line: #e3e0da; --accent: #3a5f9e; --seal: #7a5230; --ok: #2f6b4f;
-    --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+    color-scheme: light dark;
+    --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    --font-mono: ui-monospace, "JetBrains Mono", "SF Mono", "Cascadia Code", Menlo, Consolas, monospace;
+    --brand-50:#efeffe; --brand-300:#a0a0f3; --brand-400:#7c7ce8; --brand-500:#5b5bd6; --brand-600:#4a4ac4;
+    --accent-pink:#db5dd7; --accent-violet:#8b5cf6;
+    --bg: light-dark(#fafaff, #08080d);
+    --bg-elev: light-dark(#ffffff, #14141c);
+    --bg-subtle: light-dark(#f4f4fa, #1c1c26);
+    --border: light-dark(#e4e4ec, #26262f);
+    --border-strong: light-dark(#d4d4dc, #34343f);
+    --text: light-dark(#0f0f17, #f5f5fa);
+    --text-muted: light-dark(#54545f, #a0a0aa);
+    --text-faint: light-dark(#7a7a82, #6f6f78);
+    --brand: light-dark(var(--brand-500), var(--brand-400));
+    --brand-soft: light-dark(var(--brand-50), #1d1d3a);
+    --success: light-dark(#16a34a, #4ade80);
+    --danger: light-dark(#dc2626, #f87171);
+    --seal: light-dark(#8a5a2b, #d6a774);
+    /* The cast: Alice in the brand indigo, Bob in the landing page's pink accent. */
+    --alice: var(--brand); --alice-soft: var(--brand-soft);
+    --bob: light-dark(#b8329f, #e88ae4); --bob-soft: light-dark(#fcecfb, #2b1430);
+    --owner: var(--success); --host: light-dark(#5d6070, #a3a7b6); --host-soft: var(--bg-subtle);
+    --radius-md:8px; --radius-lg:12px; --radius-xl:20px; --radius-pill:999px;
+    --page-max: 84rem; --gutter: clamp(1rem, 4vw, 2.5rem);
+    --shadow-card: light-dark(0 1px 2px rgb(0 0 0 / .04), 0 1px 2px rgb(0 0 0 / .4));
   }
-  @media (prefers-color-scheme: dark) {
-    :root { --bg:#141517; --panel:#1c1e21; --ink:#e9e7e3; --muted:#9a9da3;
-            --line:#2c2f33; --accent:#8fb0e6; --seal:#c9a37a; --ok:#7fc4a1; }
-  }
-  * { box-sizing: border-box; }
-  body { margin:0; background:var(--bg); color:var(--ink);
-         font:15px/1.55 ui-sans-serif, system-ui, -apple-system, sans-serif; }
-  main { max-width: 62rem; margin: 0 auto; padding: 2rem 1.25rem 5rem; }
-  h1 { font-size:1.5rem; margin:0 0 .25rem; letter-spacing:-.01em; }
-  h2 { font-size:1rem; margin:0 0 .75rem; letter-spacing:.02em;
-       text-transform:uppercase; color:var(--muted); font-weight:600; }
-  p { margin:.5rem 0; }
-  .sub { color:var(--muted); margin-bottom:2rem; }
-  section { background:var(--panel); border:1px solid var(--line); border-radius:10px;
-            padding:1.25rem; margin-bottom:1.25rem; }
-  button { font:inherit; padding:.5rem .9rem; border-radius:7px; cursor:pointer;
-           border:1px solid var(--accent); background:var(--accent); color:#fff; }
-  button.ghost { background:transparent; color:var(--accent); }
-  button:disabled { opacity:.45; cursor:not-allowed; }
-  input, textarea { font:inherit; padding:.5rem .6rem; border-radius:7px;
-                    border:1px solid var(--line); background:var(--bg); color:var(--ink); width:100%; }
-  textarea { font-family:var(--mono); font-size:13px; min-height:5rem; }
-  code, .mono { font-family:var(--mono); font-size:12.5px; word-break:break-all; }
-  .warn { border-left:3px solid var(--seal); padding-left:.9rem; color:var(--muted); }
-  .row { display:flex; gap:.6rem; flex-wrap:wrap; align-items:center; }
-  .grid { display:grid; gap:.75rem; grid-template-columns:repeat(auto-fill,minmax(15rem,1fr)); }
-  .card { border:1px solid var(--line); border-radius:8px; padding:.85rem; }
-  .steps { list-style:none; padding:0; margin:.75rem 0 0; }
-  .steps li { padding:.3rem 0 .3rem 1.4rem; position:relative; color:var(--muted); }
-  .steps li::before { content:"✓"; position:absolute; left:0; color:var(--ok); }
-  .steps li.who { padding-left:0; margin-top:.6rem; font-size:.75rem; font-weight:600;
-                  text-transform:uppercase; letter-spacing:.05em; color:var(--ink); }
-  .steps li.who::before { content:""; }
-  .steps li.who:first-child { margin-top:0; }
-  .epochs { display:flex; gap:1.5rem; margin-top:.5rem; }
-  .epochs div { font-size:1.6rem; font-weight:600; line-height:1; }
-  .epochs span { display:block; font-size:.75rem; color:var(--muted);
-                 text-transform:uppercase; letter-spacing:.04em; margin-top:.3rem; font-weight:400; }
-  .cipher { background:var(--bg); border:1px dashed var(--line); border-radius:6px;
-            padding:.6rem; margin-top:.5rem; overflow-x:auto; }
-  .hide { display:none; }
-  #log { color:var(--muted); font-size:13px; }
+  :root[data-theme="light"] { color-scheme: light; }
+  :root[data-theme="dark"] { color-scheme: dark; }
+  * { box-sizing:border-box; }
+  [hidden], .hide { display:none !important; }
+  html { scroll-behavior:smooth; }
+  body { margin:0; background:var(--bg); color:var(--text); font-family:var(--font-sans);
+         font-size:16px; line-height:1.55; letter-spacing:-.011em; -webkit-font-smoothing:antialiased;
+         overflow-x:hidden; }
+  .bg-accent { position:fixed; inset:0; z-index:-1; pointer-events:none; background:
+    radial-gradient(circle at 0% 0%, color-mix(in srgb, var(--brand-500) 18%, transparent) 0, transparent 45%),
+    radial-gradient(circle at 100% 0%, color-mix(in srgb, var(--accent-pink) 14%, transparent) 0, transparent 40%),
+    radial-gradient(circle at 50% 100%, color-mix(in srgb, var(--accent-violet) 10%, transparent) 0, transparent 50%); }
+  a { color:var(--brand); }
+  :focus-visible { outline:2px solid var(--brand); outline-offset:3px; border-radius:4px; }
+  code, .mono { font-family:var(--font-mono); font-size:12px; word-break:break-all; }
+  .muted { color:var(--text-muted); } .bad { color:var(--danger); }
+
+  /* top bar */
+  .topbar { position:sticky; top:0; z-index:10; border-bottom:1px solid var(--border);
+            background:color-mix(in srgb, var(--bg) 82%, transparent); backdrop-filter:saturate(1.4) blur(10px); }
+  .topbar-inner { max-width:var(--page-max); margin:0 auto; padding:.7rem var(--gutter);
+                  display:flex; align-items:center; justify-content:space-between; gap:1rem; }
+  .brand { display:inline-flex; align-items:center; gap:.55rem; color:var(--text); text-decoration:none; font-weight:650; }
+  .brand-mark { display:inline-grid; place-items:center; width:2rem; height:2rem; border-radius:var(--radius-md);
+                color:#fff; background:linear-gradient(135deg, var(--brand-500), var(--accent-violet)); }
+  .topnav { display:flex; gap:.25rem; }
+  .topnav a { padding:.45rem .7rem; border-radius:var(--radius-pill); color:var(--text-muted);
+              text-decoration:none; font-size:.9rem; font-weight:500; }
+  .topnav a:hover { color:var(--text); background:var(--bg-subtle); }
+  @media (max-width:640px) { .topnav a.opt { display:none; } }
+
+  main { max-width:var(--page-max); margin:0 auto; padding:clamp(1.5rem,4vw,3rem) var(--gutter) 4rem;
+         display:flex; flex-direction:column; gap:clamp(2.75rem,6vw,4.5rem); }
+  h1, h2, h3 { color:var(--text); }
+  h2 { margin:0 0 .6rem; font-size:clamp(1.5rem,1.4vw + 1rem,2.1rem); line-height:1.15; font-weight:700; letter-spacing:-.022em; }
+  h3 { margin:0; font-size:1.1rem; line-height:1.3; font-weight:650; letter-spacing:-.015em; }
+  .label { margin:0 0 .6rem; font-size:.75rem; font-weight:600; text-transform:uppercase; letter-spacing:.08em; color:var(--text-muted); }
+  .kicker { display:inline-block; margin-bottom:.6rem; font-size:.75rem; font-weight:700;
+            text-transform:uppercase; letter-spacing:.1em; color:var(--brand); }
+  .section-head { max-width:46rem; margin-bottom:clamp(1.25rem,3vw,2rem); }
+  .section-lead { margin:0; font-size:1.05rem; color:var(--text-muted); }
+
+  /* hero */
+  .eyebrow { display:inline-flex; align-items:center; gap:.55rem; padding:.4rem .85rem; background:var(--bg-elev);
+             border:1px solid var(--border); border-radius:var(--radius-pill); color:var(--text-muted); font-size:.8125rem; font-weight:500; }
+  .live-dot { width:.5rem; height:.5rem; border-radius:50%; background:var(--success);
+              box-shadow:0 0 0 3px color-mix(in srgb, var(--success) 25%, transparent); }
+  .hero h1 { margin:1.1rem 0 0; font-size:clamp(2.2rem,4.5vw + .5rem,3.6rem); line-height:1.05; font-weight:750;
+             letter-spacing:-.03em; color:var(--brand-500);
+             background:linear-gradient(135deg, var(--brand-500) 0%, var(--accent-violet) 50%, var(--accent-pink) 100%);
+             -webkit-background-clip:text; background-clip:text; -webkit-text-fill-color:transparent; }
+  .lead { margin:1rem 0 0; font-size:clamp(1.05rem,1vw + .85rem,1.25rem); max-width:44rem; color:var(--text-muted); }
+
+  /* cards + buttons */
+  .card { background:var(--bg-elev); border:1px solid var(--border); border-radius:var(--radius-lg);
+          box-shadow:var(--shadow-card); padding:1.4rem; min-width:0; }
+  button { font:inherit; font-weight:600; font-size:.95rem; line-height:1.2; padding:.6rem 1.1rem;
+           border-radius:var(--radius-pill); border:1px solid transparent; cursor:pointer; color:#fff;
+           background:var(--brand-500); box-shadow:0 8px 24px -10px color-mix(in srgb, var(--brand-500) 70%, transparent);
+           transition:transform 150ms ease, border-color 150ms ease, background-color 150ms ease; }
+  button:hover { background:var(--brand-600); transform:translateY(-1px); }
+  button.ghost { background:var(--bg-elev); color:var(--text); border-color:var(--border-strong); box-shadow:none; }
+  button.ghost:hover { border-color:var(--brand); }
+  button.small { padding:.35rem .8rem; font-size:.85rem; }
+  button:disabled { opacity:.55; cursor:wait; transform:none; }
+  input, textarea { font:inherit; width:100%; padding:.6rem .8rem; border-radius:var(--radius-md);
+                    border:1px solid var(--border-strong); background:var(--bg-elev); color:var(--text); }
+  input:focus, textarea:focus { outline:none; border-color:var(--brand); box-shadow:0 0 0 3px var(--brand-soft); }
+  textarea { min-height:4.5rem; resize:vertical; margin:.55rem 0; }
+  .row { display:flex; gap:.6rem; align-items:center; flex-wrap:wrap; }
+  .hint { color:var(--text-muted); font-size:.85rem; margin:.5rem 0 0; }
+
+  /* architecture */
+  .arch { display:grid; grid-template-columns:minmax(0,1.15fr) minmax(0,1fr); gap:1.75rem; align-items:center; }
+  @media (max-width:900px) { .arch { grid-template-columns:1fr; } }
+  svg.diagram { width:100%; height:auto; display:block; }
+  svg.diagram text { fill:var(--text); font:12px var(--font-sans); }
+  svg.diagram .t-muted { fill:var(--text-muted); font-size:10.5px; }
+  svg.diagram .t-head { font-weight:650; font-size:12.5px; }
+  svg.diagram .t-band { fill:var(--brand); font-size:10.5px; font-weight:700; letter-spacing:.1em; }
+  svg.diagram .box { fill:var(--bg-elev); stroke:var(--border-strong); stroke-width:1.2; }
+  svg.diagram .site { fill:var(--bg-subtle); stroke:var(--brand); stroke-dasharray:5 4; stroke-width:1.3; }
+  svg.diagram .room { fill:var(--bg-elev); stroke:var(--owner); stroke-width:1.3; }
+  svg.diagram .room-x { fill:none; stroke:var(--text-faint); stroke-dasharray:4 4; }
+  svg.diagram .a { fill:var(--alice-soft); stroke:var(--alice); }
+  svg.diagram .b { fill:var(--bob-soft); stroke:var(--bob); }
+  svg.diagram .wire { stroke:var(--text-faint); stroke-width:1.3; fill:none; marker-end:url(#arrow); }
+  svg.diagram .arrowhead { fill:var(--text-faint); }
+  .points { margin:0; padding:0; list-style:none; display:grid; gap:.9rem; }
+  .points li { padding-left:1.1rem; border-left:3px solid var(--brand-soft); color:var(--text-muted); }
+  .points b { color:var(--text); }
+
+  /* room picker + guide */
+  .bar { display:grid; grid-template-columns:auto minmax(0,1fr); gap:1rem; align-items:end; margin-bottom:1.25rem; }
+  @media (max-width:900px) { .bar { grid-template-columns:1fr; } }
+  #room-picker { display:flex; gap:.6rem; flex-wrap:wrap; }
+  .room { text-align:left; background:var(--bg-elev); color:var(--text); border:1px solid var(--border);
+          box-shadow:var(--shadow-card); border-radius:var(--radius-lg); padding:.75rem 1rem;
+          display:flex; flex-direction:column; gap:.2rem; min-width:15rem; font-weight:500; }
+  .room:hover { background:var(--bg-elev); border-color:var(--brand); }
+  .room.on { border-color:var(--brand); box-shadow:0 0 0 3px var(--brand-soft); }
+  .room-name { font-weight:650; } .room-did { color:var(--text-faint); font-size:11px; }
+  .grants { display:flex; gap:.3rem; margin-top:.25rem; }
+  .grant, .chip { font-size:.72rem; font-weight:600; padding:.15rem .55rem; border-radius:var(--radius-pill);
+                  background:var(--bg-subtle); color:var(--text-muted); border:1px solid var(--border); white-space:nowrap; }
+  .chip.ok { color:var(--success); border-color:color-mix(in srgb, var(--success) 35%, var(--border)); }
+  .guide { display:flex; align-items:center; gap:.8rem; padding:1rem 1.2rem;
+           background:linear-gradient(135deg, var(--brand-soft), var(--bg-elev)); border-color:color-mix(in srgb, var(--brand) 30%, var(--border)); }
+  .guide b { color:var(--brand); white-space:nowrap; }
+
+  /* stage */
+  .stage { display:grid; gap:1rem; grid-template-columns:minmax(0,1fr) minmax(0,.72fr) minmax(0,1fr); }
+  @media (max-width:1100px) { .stage { grid-template-columns:1fr; } .host-col { order:3; } }
+  .person { border-top:4px solid var(--c); }
+  .person-head { display:flex; align-items:center; gap:.75rem; }
+  .avatar { width:2.5rem; height:2.5rem; border-radius:var(--radius-md); background:var(--c); color:#fff;
+            display:grid; place-items:center; font-weight:700; flex:none; }
+  .who-name { font-weight:700; font-size:1.1rem; letter-spacing:-.015em; }
+  .who-status { display:flex; gap:.35rem; flex-wrap:wrap; margin:.75rem 0 .9rem; }
+  .forget { margin-left:auto; }
+  .act { background:var(--cs); border-radius:var(--radius-lg); padding:1rem; }
+  .person .act button:not(.ghost) { background:var(--c); box-shadow:none; }
+  .err { color:var(--danger); font-size:.875rem; margin-top:.6rem; font-weight:500; }
+  .err:empty { display:none; }
+  .explorer { margin-top:1.2rem; }
+  .explorer-head { display:flex; justify-content:space-between; align-items:baseline; }
+  .filters { display:flex; gap:.3rem; margin:.6rem 0; flex-wrap:wrap; }
+  .filters button { background:transparent; color:var(--text-muted); border-color:var(--border); box-shadow:none;
+                    padding:.2rem .7rem; font-size:.8rem; font-weight:500; }
+  .filters button:hover { background:var(--bg-subtle); transform:none; }
+  .filters button.on { color:var(--text); border-color:var(--text); }
+  .records, .steps, #host-rows, #timeline { list-style:none; padding:0; margin:0; }
+  .rec { border:1px solid var(--border); border-radius:var(--radius-md); margin:.5rem 0; background:var(--bg-elev);
+         transition:background 1.5s, box-shadow 1.5s; }
+  .rec.new { background:var(--cs); box-shadow:0 0 0 2px var(--c); }
+  .rec.gone { opacity:.6; }
+  .rec summary { cursor:pointer; padding:.65rem .8rem; list-style:none; display:grid; grid-template-columns:1fr auto; gap:.1rem .5rem; }
+  .rec summary::-webkit-details-marker { display:none; }
+  .rec-title { font-weight:620; }
+  .rec-meta { grid-column:1 / -1; color:var(--text-faint); font-size:.75rem; }
+  .rec-snip { grid-column:1 / -1; color:var(--text-muted); font-size:.85rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  details[open] .rec-snip { display:none; }
+  .rec-body { padding:0 .8rem .55rem; white-space:pre-wrap; }
+  .rec-facts { margin:0 .8rem .65rem; display:grid; grid-template-columns:auto 1fr; gap:.2rem .75rem; font-size:.8rem; color:var(--text-muted); }
+  .rec-facts dd { margin:0; } .rec details > button { margin:0 .8rem .8rem; }
+  .cipher { background:var(--bg-subtle); border:1px dashed var(--border-strong); border-radius:6px; padding:.35rem .5rem; color:var(--seal); }
+  .by { font-size:.72rem; font-weight:600; padding:.1rem .5rem; border-radius:var(--radius-pill); background:var(--bg-subtle); align-self:start; }
+  .by-alice { background:var(--alice-soft); color:var(--alice); } .by-bob { background:var(--bob-soft); color:var(--bob); }
+  .empty { color:var(--text-muted); font-size:.875rem; padding:.6rem 0; }
+  .how { margin-top:1rem; font-size:.875rem; } .how summary { cursor:pointer; color:var(--text-muted); }
+  .steps li { padding:.2rem 0 .2rem 1.3rem; position:relative; color:var(--text-muted); }
+  .steps li::before { content:"✓"; position:absolute; left:0; color:var(--success); }
+
+  .host-col { border-top:4px solid var(--host); background:var(--host-soft); --c:var(--host); }
+  .hrow { border:1px solid var(--border); background:var(--bg-elev); border-radius:var(--radius-md); padding:.55rem .65rem; margin:.45rem 0; }
+  .hrow.gone { opacity:.6; } .hrow-top { display:flex; gap:.4rem; align-items:center; }
+  .hrow-meta { color:var(--text-faint); font-size:.75rem; margin:.15rem 0 .35rem; }
+  .facts { display:grid; grid-template-columns:auto 1fr; gap:.3rem .6rem; font-size:.85rem; margin:.8rem 0 1rem; }
+  .facts dt { font-weight:700; } .facts dt.yes { color:var(--success); } .facts dt.no { color:var(--danger); }
+  .facts dd { margin:0; color:var(--text-muted); }
+
+  /* timeline */
+  .ev { display:grid; grid-template-columns:auto 1fr auto; gap:.75rem; padding:.65rem 0; border-bottom:1px solid var(--border); }
+  .ev:last-child { border-bottom:0; }
+  .ev .dot { width:.7rem; height:.7rem; border-radius:50%; margin-top:.4rem; background:var(--text-faint); }
+  .ev-alice .dot { background:var(--alice); } .ev-bob .dot { background:var(--bob); }
+  .ev-owner .dot { background:var(--owner); } .ev-host .dot { background:var(--host); }
+  .ev-detail { color:var(--text-muted); font-size:.85rem; }
+  .ev time { color:var(--text-faint); font-size:.75rem; white-space:nowrap; }
+
+  /* security */
+  .swim-wrap { overflow-x:auto; }
+  .swim { min-width:640px; }
+  svg.diagram .lane-a { fill:var(--alice-soft); } svg.diagram .lane-b { fill:var(--bob-soft); }
+  svg.diagram .lane-m, svg.diagram .lane-h { fill:var(--bg-subtle); }
+  svg.diagram .lane-head { font-weight:700; font-size:12.5px; }
+  svg.diagram .enc { fill:var(--bg-elev); stroke:var(--success); stroke-width:2; }
+  svg.diagram .auth { fill:var(--bg-elev); stroke:var(--brand); stroke-width:1.6; }
+  svg.diagram .fwd { fill:var(--bg-elev); stroke:var(--border-strong); stroke-dasharray:4 3; }
+  svg.diagram .tsp { stroke:var(--brand); stroke-width:1.6; fill:none; stroke-dasharray:6 4; marker-end:url(#arrow-b); }
+  svg.diagram .arrowhead-b { fill:var(--brand); }
+  svg.diagram .tag { fill:var(--brand); font-size:10px; font-weight:700; }
+  svg.diagram .tag-enc { fill:var(--success); font-size:10px; font-weight:700; }
+  .legend { display:flex; flex-wrap:wrap; gap:.6rem 1.4rem; margin-top:1rem; font-size:.85rem; color:var(--text-muted); }
+  .legend span { display:inline-flex; align-items:center; gap:.45rem; }
+  .sw { width:1.6rem; height:.85rem; border-radius:4px; background:var(--bg-elev); }
+  .sw-enc { border:2px solid var(--success); } .sw-auth { border:2px solid var(--brand); }
+  .sw-tsp { height:0; border-top:2px dashed var(--brand); border-radius:0; }
+  .layers { display:grid; gap:1rem; grid-template-columns:repeat(3, minmax(0,1fr)); margin-top:1.25rem; }
+  @media (max-width:900px) { .layers { grid-template-columns:1fr; } }
+  .layer { display:flex; flex-direction:column; gap:.55rem; }
+  .layer p { margin:0; color:var(--text-muted); font-size:.95rem; }
+  .layer-icon { display:inline-grid; place-items:center; width:2.4rem; height:2.4rem; border-radius:var(--radius-md);
+                background:var(--brand-soft); color:var(--brand); font-weight:750; }
+  .layer.l-enc .layer-icon { background:color-mix(in srgb, var(--success) 14%, transparent); color:var(--success); }
+  .table-wrap { overflow-x:auto; margin-top:1.25rem; }
+  table.sees { width:100%; border-collapse:collapse; font-size:.9rem; min-width:40rem; }
+  .sees th, .sees td { padding:.65rem .75rem; border-bottom:1px solid var(--border); text-align:center; }
+  .sees th:first-child, .sees td:first-child { text-align:left; }
+  .sees thead th { font-size:.75rem; text-transform:uppercase; letter-spacing:.06em; color:var(--text-muted); font-weight:600; }
+  .sees .y { color:var(--success); font-weight:700; } .sees .n { color:var(--text-faint); }
+  .sees small { display:block; color:var(--text-muted); font-size:.75rem; font-weight:400; }
+  .footnote { font-size:.85rem; color:var(--text-muted); margin-top:.75rem; }
+
+  .site-footer { border-top:1px solid var(--border); }
+  .footer-inner { max-width:var(--page-max); margin:0 auto; padding:2rem var(--gutter) 3rem; color:var(--text-faint); font-size:.85rem; }
 </style>
 
-<main>
-  <h1>Data rooms</h1>
-  <p class="sub">Mint your own key in this tab, join a room, and read and write records
-    the host stores but cannot read.</p>
+<div class="bg-accent" aria-hidden="true"></div>
+<header class="topbar">
+  <div class="topbar-inner">
+    <a class="brand" href="#top">
+      <span class="brand-mark" aria-hidden="true">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>
+      </span>
+      <span>Data rooms</span>
+    </a>
+    <nav class="topnav" aria-label="Sections">
+      <a href="#how">How it fits</a>
+      <a href="#demo">Try it</a>
+      <a href="#security" class="opt">Security</a>
+      <a href="classic.html" class="opt">Classic view</a>
+    </nav>
+  </div>
+</header>
 
-  <section id="identity-panel">
-    <h2>1 · Who you are</h2>
-    <p id="did-line" class="muted">No identity in this browser yet.</p>
-    <div class="row">
-      <button id="mint" disabled>Loading…</button>
-      <button id="forget" class="ghost hide">Forget it</button>
-      <span style="flex:1"></span>
-      <span style="color:var(--muted);font-size:13px">acting as</span>
-      <button id="who-alice" class="ghost">alice</button>
-      <button id="who-bob" class="ghost">bob</button>
-    </div>
-    <p class="sub" style="margin:.6rem 0 0">Two identities in this browser, both real —
-      separate keys, separate MLS leaves, separate snapshots. Switching is not a filter on
-      a view; it is being somebody else. Join a room as each, and watch what the first has
-      to do to keep reading once the second arrives.</p>
-    <p class="warn" style="margin-top:1rem">
-      This key lives in this browser and nowhere else. Clearing site data destroys it, and
-      with it every room you joined — nobody can re-issue it for you. That is the point,
-      and it is also the risk.
-    </p>
+<main id="top">
+  <section class="hero">
+    <span class="eyebrow"><span class="live-dot"></span>Live demo · real keys, real encryption</span>
+    <h1>Shared rooms your host can't read</h1>
+    <p class="lead">Two people, one data room. Everything one writes is encrypted in their own browser,
+      stored by a host that cannot read it, and opened by the other with their own key.</p>
   </section>
 
-  <section id="rooms-panel" class="hide">
-    <h2>2 · Rooms</h2>
-    <div id="rooms" class="grid"></div>
-    <div style="margin-top:1.25rem;border-top:1px solid var(--line);padding-top:1rem">
-      <p class="sub" style="margin:0 0 .6rem">Or join one this site has never heard of.
-        Paste a room's DID: if it is a <code>did:peer:2</code> it carries the mediator its
-        owner listens on, and everything else follows from that one lookup — no host URL, no
-        catalogue, no configuration.</p>
-      <div class="row">
-        <input id="by-did" placeholder="did:peer:2.Vz6Mk…" style="flex:1">
-        <button id="join-by-did">Ask to join</button>
+  <section id="how" aria-labelledby="how-h">
+    <div class="section-head">
+      <span class="kicker">How it fits together</span>
+      <h2 id="how-h">The site is a client. Rooms are their own parties.</h2>
+      <p class="section-lead">One site can open any number of rooms, and none of them belongs to it.</p>
+    </div>
+    <div class="card arch">
+      <svg class="diagram" viewBox="0 0 680 300" role="img" aria-labelledby="arch-title">
+      <title id="arch-title">This site is only a client. Each room is an independent party with its own DID, owner and host, reached over a mediator.</title>
+      <defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path class="arrowhead" d="M0,0 L10,5 L0,10 z"/></marker></defs>
+
+      <!-- the site -->
+      <rect class="site" x="8" y="16" width="200" height="268" rx="12"/>
+      <text class="t-head" x="22" y="40">This site</text>
+      <text class="t-muted" x="22" y="56">a client — holds no rooms</text>
+      <rect class="a" x="22" y="72" width="172" height="76" rx="9" stroke-width="1.3"/>
+      <text class="t-head" x="34" y="95">Alice's browser</text>
+      <text class="t-muted" x="34" y="113">her keys and memberships</text>
+      <text class="t-muted" x="34" y="129">encrypts &amp; decrypts here</text>
+      <rect class="b" x="22" y="162" width="172" height="76" rx="9" stroke-width="1.3"/>
+      <text class="t-head" x="34" y="185">Bob's browser</text>
+      <text class="t-muted" x="34" y="203">his keys and memberships</text>
+      <text class="t-muted" x="34" y="219">encrypts &amp; decrypts here</text>
+      <text class="t-muted" x="22" y="266">opens any room by its DID</text>
+
+      <!-- mediator -->
+      <rect class="box" x="238" y="116" width="126" height="68" rx="10"/>
+      <text class="t-head" x="252" y="140">Mediator</text>
+      <text class="t-muted" x="252" y="157">relays messages</text>
+      <text class="t-muted" x="252" y="172">TSP · DIDComm</text>
+      <path class="wire" d="M208,150 L236,150"/>
+      <path class="wire" d="M364,150 C386,150 384,80 404,80"/>
+      <path class="wire" d="M364,150 C386,150 384,190 404,190"/>
+      <path class="wire" d="M364,150 C386,150 384,262 404,262" stroke-dasharray="4 4"/>
+
+      <!-- rooms -->
+      <rect class="room" x="406" y="16" width="266" height="124" rx="11"/>
+      <text class="t-head" x="420" y="38">Room: The Library</text>
+      <text class="t-muted" x="420" y="54">its own DID · its own credentials</text>
+      <rect class="box" x="420" y="66" width="118" height="60" rx="8"/>
+      <text class="t-head" x="430" y="86">Owner</text>
+      <text class="t-muted" x="430" y="102">decides who joins</text>
+      <text class="t-muted" x="430" y="116">issues credentials</text>
+      <rect class="box" x="546" y="66" width="114" height="60" rx="8"/>
+      <text class="t-head" x="556" y="86">Host</text>
+      <text class="t-muted" x="556" y="102">stores ciphertext</text>
+      <text class="t-muted" x="556" y="116">can't read it</text>
+
+      <rect class="room" x="406" y="152" width="266" height="80" rx="11"/>
+      <text class="t-head" x="420" y="174">Room: The Workshop</text>
+      <text class="t-muted" x="420" y="190">different DID, owner and rules</text>
+      <text class="t-muted" x="420" y="205">may share a host, or not</text>
+      <text class="t-muted" x="420" y="220">grants read · write · curate</text>
+
+      <rect class="room-x" x="406" y="244" width="266" height="40" rx="11"/>
+      <text class="t-muted" x="420" y="268">…any other room, on any host</text>
+    </svg>
+      <ul class="points">
+        <li><b>The site is not the room.</b> It serves this page and keeps each person's keys in their browser. It stores no records and decides nothing.</li>
+        <li><b>A room is its own party.</b> It has its own DID, issues its own membership credentials, and its <b>owner</b> decides who joins.</li>
+        <li><b>The host stores, never reads.</b> Records arrive already encrypted. Hosts can be swapped; the room keeps its identity.</li>
+        <li><b>Many rooms, one site.</b> The two below come from this sample — any room DID works the same way. <a href="#security">How a record is protected ↓</a></li>
+      </ul>
+    </div>
+  </section>
+
+  <section id="demo" aria-labelledby="demo-h">
+    <div class="section-head">
+      <span class="kicker">Try it</span>
+      <h2 id="demo-h">Alice and Bob, side by side</h2>
+      <p class="section-lead">Each column is a separate person with their own keys and connection. Follow the next step, then watch what reaches the other side.</p>
+    </div>
+    <div class="bar">
+      <div><p class="label">Rooms</p><div id="room-picker"></div></div>
+      <div class="card guide"><b>Next →</b><span id="next"></span></div>
+    </div>
+
+    <div class="stage">
+      <section class="card person" id="col-alice" style="--c:var(--alice);--cs:var(--alice-soft)">
+        <div class="person-head"><div class="avatar">A</div>
+          <div><div class="who-name">Alice</div><div class="who-did"></div></div>
+          <button class="ghost small forget hide">Destroy key</button></div>
+        <div class="who-status"></div>
+        <div class="act"></div>
+        <div class="err"></div>
+        <div class="explorer hide">
+          <div class="explorer-head"><p class="label">In this room</p><span class="count muted"></span></div>
+          <input class="search" placeholder="Search titles and text…">
+          <div class="filters"><button data-filter="all">All</button><button data-filter="mine">Mine</button>
+            <button data-filter="others">From others</button><button data-filter="retracted">Retracted</button></div>
+          <ul class="records"></ul>
+        </div>
+        <details class="how hide"><summary>How Alice got in</summary><ul class="steps"></ul></details>
+      </section>
+
+      <section class="card host-col">
+        <div class="person-head"><div class="avatar">H</div>
+          <div><div class="who-name">The room's host</div><div class="muted" style="font-size:.85rem">what it stores — and all it can see</div></div></div>
+        <dl class="facts">
+          <dt class="yes">✓</dt><dd>stores every record, as ciphertext</dd>
+          <dt class="yes">✓</dt><dd>checks each request's credential chain</dd>
+          <dt class="no">✗</dt><dd>holds no keys and no member list</dd>
+          <dt class="no">✗</dt><dd>cannot read titles or text</dd>
+        </dl>
+        <div class="explorer-head"><p class="label">Stored</p><span id="host-count" class="muted" style="font-size:.85rem"></span></div>
+        <ul id="host-rows"></ul>
+        <p class="hint">Byte-for-byte what the host returned to a member's read.</p>
+      </section>
+
+      <section class="card person" id="col-bob" style="--c:var(--bob);--cs:var(--bob-soft)">
+        <div class="person-head"><div class="avatar">B</div>
+          <div><div class="who-name">Bob</div><div class="who-did"></div></div>
+          <button class="ghost small forget hide">Destroy key</button></div>
+        <div class="who-status"></div>
+        <div class="act"></div>
+        <div class="err"></div>
+        <div class="explorer hide">
+          <div class="explorer-head"><p class="label">In this room</p><span class="count muted"></span></div>
+          <input class="search" placeholder="Search titles and text…">
+          <div class="filters"><button data-filter="all">All</button><button data-filter="mine">Mine</button>
+            <button data-filter="others">From others</button><button data-filter="retracted">Retracted</button></div>
+          <ul class="records"></ul>
+        </div>
+        <details class="how hide"><summary>How Bob got in</summary><ul class="steps"></ul></details>
+      </section>
+    </div>
+  </section>
+
+  <section aria-labelledby="tl-h">
+    <div class="section-head">
+      <span class="kicker">Activity</span>
+      <h2 id="tl-h">What just happened</h2>
+    </div>
+    <div class="card"><ul id="timeline"></ul></div>
+  </section>
+
+  <section id="security" aria-labelledby="sec-h">
+    <div class="section-head">
+      <span class="kicker">Security</span>
+      <h2 id="sec-h">How a record is protected</h2>
+      <p class="section-lead">Where encryption happens when Alice writes and Bob reads — and what every party in between can and cannot see.</p>
+    </div>
+
+    <div class="card swim-wrap">
+      <svg class="diagram swim" viewBox="0 0 872 590" role="img" aria-labelledby="swim-title">
+        <title id="swim-title">Swimlane: Alice encrypts in her browser, signs, and sends over TSP via the mediator to the host, which verifies and stores ciphertext. Bob signs a read, the host verifies and returns the same ciphertext, and Bob decrypts in his browser.</title>
+        <defs><marker id="arrow-b" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path class="arrowhead-b" d="M0,0 L10,5 L0,10 z"/></marker></defs>
+        <rect class="lane-a" x="8" y="8" width="208" height="574" rx="10"/>
+        <rect class="lane-m" x="224" y="8" width="208" height="574" rx="10"/>
+        <rect class="lane-h" x="440" y="8" width="208" height="574" rx="10"/>
+        <rect class="lane-b" x="656" y="8" width="208" height="574" rx="10"/>
+        <text class="lane-head" x="22" y="32">Alice's browser</text>
+        <text class="lane-head" x="238" y="32">Mediator</text>
+        <text class="lane-head" x="454" y="32">Host</text>
+        <text class="lane-head" x="670" y="32">Bob's browser</text>
+
+        <text class="t-band" x="22" y="62">WRITE · ALICE ADDS A NOTE</text>
+        <rect class="enc" x="20" y="74" width="184" height="80" rx="9"/>
+        <text class="t-head" x="32" y="96">1 · Encrypt the note</text>
+        <text class="t-muted" x="32" y="114">key from Alice's MLS group</text>
+        <text class="t-muted" x="32" y="130">ChaCha20-Poly1305, bound to</text>
+        <text class="t-muted" x="32" y="145">room, key, version, epoch</text>
+
+        <rect class="auth" x="20" y="168" width="184" height="64" rx="9"/>
+        <text class="t-head" x="32" y="190">2 · Sign the request</text>
+        <text class="t-muted" x="32" y="208">Alice's did:key (Ed25519)</text>
+        <text class="t-muted" x="32" y="223">+ credential: write, 4 hours</text>
+
+        <path class="tsp" d="M204,200 L234,200"/>
+        <rect class="fwd" x="236" y="168" width="184" height="64" rx="9"/>
+        <text class="t-head" x="248" y="190">3 · Mediator forwards</text>
+        <text class="t-muted" x="248" y="208">sees the next hop only</text>
+        <text class="t-muted" x="248" y="223">opens neither layer</text>
+
+        <path class="tsp" d="M420,200 L450,200"/>
+        <rect class="auth" x="452" y="160" width="184" height="80" rx="9"/>
+        <text class="t-head" x="464" y="182">4 · Verify, then store</text>
+        <text class="t-muted" x="464" y="200">signature + room credential</text>
+        <text class="t-muted" x="464" y="215">stores the ciphertext as-is</text>
+        <text class="t-muted" x="464" y="230">has no key to open it</text>
+
+        <text class="t-muted" x="670" y="196">Not involved — Bob fetches</text>
+        <text class="t-muted" x="670" y="211">it whenever he next reads</text>
+
+        <text class="t-band" x="22" y="278">READ · BOB OPENS IT</text>
+        <rect class="auth" x="668" y="292" width="184" height="64" rx="9"/>
+        <text class="t-head" x="680" y="314">5 · Sign the request</text>
+        <text class="t-muted" x="680" y="332">Bob's did:key (Ed25519)</text>
+        <text class="t-muted" x="680" y="347">+ credential: read, 4 hours</text>
+
+        <path class="tsp" d="M666,324 L422,324"/>
+        <text class="tag" x="616" y="317">TSP</text>
+        <rect class="fwd" x="236" y="292" width="184" height="64" rx="9"/>
+        <text class="t-head" x="248" y="314">Mediator forwards</text>
+        <text class="t-muted" x="248" y="332">sees the next hop only</text>
+        <text class="t-muted" x="248" y="347">opens neither layer</text>
+
+        <path class="tsp" d="M328,356 C328,400 400,408 450,408"/>
+        <rect class="auth" x="452" y="376" width="184" height="64" rx="9"/>
+        <text class="t-head" x="464" y="398">6 · Verify, then return</text>
+        <text class="t-muted" x="464" y="416">checks the read credential</text>
+        <text class="t-muted" x="464" y="431">returns the same ciphertext</text>
+
+        <path class="tsp" d="M544,440 C544,500 600,518 666,518"/>
+        <text class="tag" x="552" y="480">TSP, via mediator</text>
+        <rect class="enc" x="668" y="470" width="184" height="96" rx="9"/>
+        <text class="t-head" x="680" y="492">7 · Decrypt in Bob's tab</text>
+        <text class="t-muted" x="680" y="510">key from Bob's MLS group</text>
+        <text class="t-muted" x="680" y="525">older epoch? walks the</text>
+        <text class="t-muted" x="680" y="540">key chain backwards</text>
+        <text class="t-muted" x="680" y="555">binding checked on open</text>
+
+        <text class="t-muted" x="22" y="400">Alice isn't needed to read —</text>
+        <text class="t-muted" x="22" y="415">she can be offline</text>
+      </svg>
+
+      <div class="legend">
+        <span><i class="sw sw-enc"></i>record encrypted or decrypted — only in a member's browser</span>
+        <span><i class="sw sw-tsp"></i>transport encryption (TSP or DIDComm), sealed to the recipient</span>
+        <span><i class="sw sw-auth"></i>credential check — signed request plus a credential the room issued</span>
       </div>
     </div>
-  </section>
 
-  <section id="join-panel" class="hide">
-    <h2>3 · How you got in</h2>
-    <p class="sub" style="margin:0">Admission is a two-party act, and both halves are
-      shown. The owner decides and issues; this browser checks before it acts on anything.
-      Neither side's checks substitute for the other's — the owner's stop a forged
-      invitation adding a member, and yours stop your own key holder being filled with a
-      room you never agreed to join.</p>
-    <ul id="steps" class="steps"></ul>
-    <p class="sub" style="margin:.75rem 0 0">This room's address:
-      <code id="room-link" class="mono"></code> — a room is addressed, never configured, so
-      that link works in any browser holding keys for it, against a host this site has never
-      seen.</p>
-    <div class="epochs">
-      <div id="epoch">–<span>your epoch</span></div>
-      <div id="earliest">–<span>earliest readable</span></div>
+    <div class="layers">
+      <article class="card layer l-enc">
+        <div class="layer-icon">1</div>
+        <h3>Record encryption — members only</h3>
+        <p>Each record is encrypted in the writer's browser with a key derived from the room's MLS group at the current epoch, and bound to the room, record key and version. Only group members can derive that key: not the host, the mediator or this site.</p>
+        <p>Every join or removal starts a new epoch. Someone removed can't read what's written afterwards; a newcomer reads earlier records through the epoch key chain, which only ever walks backwards.</p>
+      </article>
+      <article class="card layer">
+        <div class="layer-icon">2</div>
+        <h3>Transport encryption — hop to recipient</h3>
+        <p>Every request travels inside TSP (or DIDComm), sealed to the party it's for — the host or the room's owner. The mediator routes it and learns only the next hop.</p>
+        <p>This protects the request and the credential it carries in flight. The record inside was already encrypted; this is a second, independent layer.</p>
+      </article>
+      <article class="card layer">
+        <div class="layer-icon">3</div>
+        <h3>Authorization — no member list</h3>
+        <p>Every request is signed by the member's own key and carries a credential the room itself issued, narrowed to one action (read, write or curate) for four hours.</p>
+        <p>The host checks it against the room's DID and keeps no roster. It isn't a bearer token: it is bound to whoever signed, so nobody else can use a copy of it.</p>
+      </article>
     </div>
-    <p class="sub" style="margin-top:.75rem">Two numbers, because they are different
-      repairs. Behind the room's epoch means a commit has not been delivered. Earliest
-      equal to current means the key chain has not arrived — you can read from where you
-      joined, not before.</p>
-  </section>
 
-  <section id="records-panel" class="hide">
-    <h2>4 · Records</h2>
-    <div class="row" style="margin-bottom:.75rem">
-      <input id="rec-key" placeholder="record key" style="max-width:14rem">
-      <button id="write">Seal &amp; write</button>
+    <div class="card table-wrap">
+      <p class="label">Who can see what</p>
+      <table class="sees">
+        <thead><tr><th></th><th>Alice &amp; Bob<small>members</small></th><th>Room owner<small>a member too</small></th>
+          <th>Mediator</th><th>Host</th><th>Web server</th></tr></thead>
+        <tbody>
+          <tr><td>The note's title and text</td><td class="y">✓</td><td class="y">✓</td><td class="n">✗</td><td class="n">✗</td><td class="n">✗</td></tr>
+          <tr><td>Record key, version and epoch</td><td class="y">✓</td><td class="y">✓</td><td class="n">✗<small>sealed in transit</small></td><td class="y">✓<small>to store it</small></td><td class="n">✗</td></tr>
+          <tr><td>Which member acted</td><td class="y">✓</td><td class="y">✓</td><td class="n">✗<small>a throwaway transport DID</small></td><td class="y">✓<small>this room's tier logs it</small></td><td class="n">✗</td></tr>
+          <tr><td>Who is in the room</td><td class="y">✓</td><td class="y">✓</td><td class="n">✗</td><td class="n">✗<small>no roster</small></td><td class="n">✗</td></tr>
+          <tr><td>Any member's private key</td><td>own only</td><td>own only</td><td class="n">✗</td><td class="n">✗</td><td class="n">✗</td></tr>
+        </tbody>
+      </table>
+      <p class="footnote">These rooms are on the <em>attributed</em> tier, so the host records which member key acted. A <em>private</em> room hides even that, behind a proof the working group has not yet settled. In this sample the owner runs inside the web-server process for convenience — they are separate roles, and the web server's part is only serving this page.</p>
     </div>
-    <textarea id="rec-body" placeholder="Write something. It is sealed in this tab before it leaves."></textarea>
-    <div id="records" style="margin-top:1rem"></div>
-  </section>
-
-  <section>
-    <h2>What is real here, and what is not</h2>
-    <p><strong>Real.</strong> Your key, minted and held in WebAssembly — this page never
-      sees the private half. The MLS group, the sealing and the epoch chain are
-      <code>vti-rooms</code> itself, the same crate the services link. The invitation, the
-      membership and the authority are DTG credentials the room signed. Every record
-      operation goes to <strong>the real <code>room-host</code></strong> as a signed Trust
-      Task, and it authorises each one against a chain narrowed to that single action —
-      <code>read</code> to list, <code>write</code> to store. It stores ciphertext and has
-      no code path that could read it.</p>
-    <p><strong>And none of it needs a URL.</strong> A room says which mediator its owner
-      listens on, and this page reaches both that owner and the room's host through it — over
-      TSP where they offer it, DIDComm where they do not. So the site works against a room and
-      a host it has never seen, neither of which has to be somewhere your browser is allowed
-      to call. What that buys is reach, not authority: the host still takes who you are from
-      the signature on each request and what you may do from the chain the room issued, so
-      the same bytes would be exactly as authorised had they gone over HTTP.</p>
-    <p>You hold <strong>two keys</strong>, and they do different jobs. The one above is your
-      room identity: it lives in wasm, signs everything, and is what the room's credentials
-      name. The other is a throwaway address the mediator delivers to, minted fresh each
-      session. Every request carries a proof of each, and names the second inside the first —
-      so a signed request cannot be picked up and replayed by somebody else's connection.</p>
-    <p><strong>Try this first.</strong> Join a room as <code>alice</code>, write something,
-      then switch to <code>bob</code> and join too. Bob reads what Alice wrote before he
-      arrived — not because the host handed him anything readable, but because he walked
-      the <em>epoch key chain</em>: each rung seals one epoch's key under its successor's,
-      and a holder of the current key walks backwards down them. Watch
-      <code>earliest readable</code> go to 1 the moment the rungs arrive.</p>
-    <p>Backwards only, and that is the property rather than a limit: a rung lets you go down
-      from a key you hold, never up to one you do not — which is what makes a removal
-      forward-only. Somebody removed at epoch 7 cannot climb to 8.</p>
-    <p><strong>Then this.</strong> Retract a record in each room. The Workshop grants
-      <code>curate</code> and the Library does not, so the same button works in one and is
-      refused in the other — refused <em>in this tab</em>, before any request is made,
-      because <code>attenuate</code> will not widen what the room gave you. "You were never
-      given this" and "the host disagreed" are different sentences, and only the first can
-      be answered by asking the owner.</p>
-    <p><strong>Standing in.</strong> The owner. In a real room that is a person with an
-      agent, deciding; here it admits anyone who asks and says so. What it issues is not
-      pretended — the credentials are real and the ceremony is the same either side of the
-      decision.</p>
-    <p><strong>Deliberately absent.</strong> The <code>private</code> tier, whose subject
-      binding needs a zero-knowledge profile the working group has not settled — a demo
-      tier that quietly behaved like this one would misrepresent it.</p>
-    <p id="log"></p>
   </section>
 </main>
 
-<script type="module">
-import init, { mintKeyPackage, verifyInvitation, Identity, RoomMember } from "./vendor/vti_rooms.js";
-import { requestAdmission, requestCommits, requestInvitation } from "./admission.js";
-import { advertised, closeLinks, issuerKey, linkTo, mintTransportIdentity } from "./carrier.js";
-
-// The module is ~1.9 MB and every handler below depends on it, so the buttons stay
-// disabled until it is ready. Without this the page looks finished before it is, and a
-// click in that window does nothing at all — which reads as broken rather than as slow.
-await init();
-document.getElementById("mint").disabled = false;
-document.getElementById("mint").textContent = "Mint a did:key";
-
-const $ = (id) => document.getElementById(id);
-const log = (m) => { $("log").textContent = m; };
-
-// `did:key` derivation lives in wasm now, beside the key it derives from — so does
-// signing, so the private half never reaches this file.
-const b64u = {
-  enc: (b) => btoa(String.fromCharCode(...b)).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,""),
-  dec: (s) => Uint8Array.from(atob(s.replace(/-/g,"+").replace(/_/g,"/")), c => c.charCodeAt(0)),
-};
-
-// ── storage ────────────────────────────────────────────────────────────────
-// localStorage, deliberately: this is a demo and the snapshot is small. A real
-// wallet keeps it in IndexedDB behind a non-extractable key. Both are per-origin
-// and per-browser; neither reaches us.
-const S = {
-  get: (k) => { try { return JSON.parse(localStorage.getItem(k) ?? "null"); } catch { return null; } },
-  set: (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} },
-  del: (k) => { try { localStorage.removeItem(k); } catch {} },
-};
-
-let identity = null;               // the wasm-held signing identity
-let me = null;                     // { did } — the public half, for display
-let member = null;                 // a live RoomMember
-let currentRoomDid = null;
-
-// Several identities in one browser, because a room with one member demonstrates
-// nothing about a room. Each is a real `did:key` with its own MLS leaf and its own
-// snapshots — switching is not a view filter, it is being somebody else.
-const WHO = ["alice", "bob"];
-let who = S.get("dr:who") ?? WHO[0];
-const key = (suffix) => `dr:${who}:${suffix}`;
-
-function load() {
-  const saved = S.get(key("identity"));
-  identity = saved ? Identity.restore(saved) : null;
-  me = identity ? { did: identity.did } : null;
-  member = null; currentRoomDid = null;
-}
-load();
-
-/// Invitations this browser has already spent. The member's own half of single-use.
-const spent = () => JSON.stringify(S.get(key("spent")) ?? []);
-const markSpent = (id) => S.set(key("spent"), [...(S.get(key("spent")) ?? []), id]);
-
-// The key is minted and held in wasm; this page never sees the private half. The
-// snapshot is key material all the same — it is what restores the identity — so it
-// lives in per-origin storage and goes nowhere else.
-async function mint() {
-  identity = Identity.mint();
-  S.set(key("identity"), identity.snapshot());
-  me = { did: identity.did };
-  renderIdentity();
-  await loadRooms();
-  // Pick the link back up. Somebody who arrived by one has already said which room they
-  // want; making them ask again would be forgetting it.
-  await openAddressedRoom();
-}
-
-function renderIdentity() {
-  for (const name of WHO) {
-    const b = $("who-" + name);
-    b.className = name === who ? "" : "ghost";
-  }
-  if (!me) {
-    $("did-line").textContent = `No identity for ${who} in this browser yet.`;
-    $("mint").classList.remove("hide"); $("forget").classList.add("hide");
-    $("rooms-panel").classList.add("hide");
-    return;
-  }
-  $("did-line").innerHTML = `You are <strong>${who}</strong> — <code>${me.did}</code>`;
-  $("mint").classList.add("hide"); $("forget").classList.remove("hide");
-  $("rooms-panel").classList.remove("hide");
-}
-
-/// This page's transport identity, minted once and shared by every link.
-///
-/// One rather than one per conversation: a mediator addresses a DID and permits it one
-/// socket, so two identities would mean two sockets to the same mediator for the same person
-/// — and the mediator would evict one of them.
-let transport = null;
-
-/// A link to whoever `did` is, and the carrier they say they serve.
-///
-/// The link is per **mediator**, not per party: a room's owner and its host are usually on
-/// the same one, and one socket is what a mediator allows. Reused across the page.
-async function connect(did) {
-  transport ??= mintTransportIdentity();
-  const found = await linkTo(did, transport);
-  if (!found) {
-    throw new Error(
-      `${did} advertises nowhere to reach it — a did:key can be verified but not dialled`,
-    );
-  }
-  return found;
-}
-
-/// Open a room named in the URL rather than listed by the sample.
-///
-/// Works when this browser already holds keys for it — which is the case that matters,
-/// because it is the one that proves the site is a client rather than a front end for the
-/// room shipped beside it. Everything the room panel does from here is host-only: list,
-/// get, put, curate, and the epoch chain.
-///
-/// And when this browser holds no keys for it, it asks. Admission needs the room's owner,
-/// and reaching one this site was never told about means resolving the room's DID to a
-/// mediator and speaking DIDComm — which is what [`joinByDid`] does. A `did:key` room still
-/// cannot be reached this way, because it has no service block to say where anyone listens;
-/// that is said plainly rather than offered and then failing.
-async function openAddressedRoom() {
-  const addressed = roomFromUrl();
-  if (!addressed) return false;
-  // Handed a link before there is anybody to be handed it. Say so and remember it: a room
-  // is joined by *somebody*, and silence here reads as a link that did not work.
-  if (!me) {
-    log("you were given a room, but this browser has no key yet — mint one and it will "
-      + "carry on from here");
-    return false;
-  }
-
-  const held = S.get(key("room:" + addressed.roomDid));
-  if (!held) {
-    // Not a dead end any more. If the room says where its owner listens, ask — which is
-    // the whole of being handed a link to a room this site has never seen.
-    await joinByDid(addressed.roomDid);
-    return true;
-  }
-  // The host from the link wins: a room may move, and the address you were given is more
-  // current than the one you stored when you joined.
-  if (addressed.host && addressed.host !== held.host) {
-    S.set(key("room:" + addressed.roomDid), { ...held, host: addressed.host });
-  }
-  await openRoom(addressed.roomDid);
-  return true;
-}
-
-// ── rooms ──────────────────────────────────────────────────────────────────
-//
-// A room has two names here and they are not interchangeable. Its **DID** is its
-// identifier: what its credentials are issued by, what a record's ciphertext is bound
-// to, what `vti-rooms` means by `roomId`. The **slug** is a path segment this sample
-// room happens to route on, and nothing in the trust model knows about it.
-//
-// Conflating them is not cosmetic — it was caught here by the invitation check, which
-// refused a perfectly good invitation on the grounds that `demo-library` had not issued
-// it. That refusal was correct.
-/// The catalogue as this page last read it, so a join knows where the room's records live.
-///
-/// A room's identifier deliberately does not name its host — a room may be served by several,
-/// and one that named its host could never move — so somebody has to say. For a listed room
-/// that is the catalogue; for an addressed one it is the `?at=` in the link.
-let catalogue = [];
-const hostForDid = (roomDid) => catalogue.find((r) => r.roomDid === roomDid)?.host;
-
-async function loadRooms() {
-  const rooms = await (await fetch("/api/rooms")).json();
-  catalogue = rooms;
-  $("rooms").innerHTML = "";
-  for (const r of rooms) {
-    const held = S.get(key("room:" + r.roomDid));
-    const el = document.createElement("div");
-    el.className = "card";
-    el.innerHTML = `<strong>${r.label}</strong>
-      <p class="mono" style="color:var(--muted);margin:.35rem 0">${r.roomId}</p>
-      <p style="color:var(--muted);font-size:13px">epoch ${r.epoch} · ${r.members} member(s)</p>
-      <p style="color:var(--muted);font-size:13px">grants <code>${r.grants.join("</code>, <code>")}</code></p>`;
-    const b = document.createElement("button");
-    b.className = held ? "ghost" : "";
-    b.textContent = held ? "Open" : "Ask to join";
-    b.onclick = () => held ? openRoom(r.roomDid) : joinByDid(r.roomDid);
-    el.append(b);
-    $("rooms").append(el);
-  }
-}
-
-/// Join a room, knowing nothing but its DID.
-///
-/// **The only way in**, whether you clicked a card or pasted an identifier, and that is the
-/// point rather than a tidy-up. There used to be a second path over this site's own HTTP API,
-/// and it was the one a card used — so the common case took the weaker route. Weaker
-/// specifically: over HTTP the asker's DID is a claim, where here it is proved by the
-/// request's own signature and bound to the connection that carried it. Two admission
-/// implementations with different security properties is how the better one ends up unused.
-///
-/// What it needs from this site is nothing:
-///
-/// - the room is found by **resolving its identifier**, not by looking it up in a
-///   catalogue. A `did:peer:2` carries the mediator its owner listens on, and resolving one
-///   is arithmetic — no network, no registry.
-/// - the request is signed by the **room identity in wasm** and sent from a **transport
-///   identity in this file**, and it names the second so the owner can check they agree.
-///   Two proofs about two different things: who authored this, and who is on the other end
-///   of this connection.
-/// - the owner answers over the same connection, so nothing here needs a URL.
-///
-/// What stays identical is everything that matters: the same six invitation clauses run in
-/// the same wasm before a KeyPackage is minted, and the room's credentials name the same
-/// `did:key` they would have either way.
-async function joinByDid(roomDid) {
-  roomDid = roomDid.trim();
-  if (!roomDid) return;
-  if (!me) { log("mint an identity first — a room is joined by somebody"); return; }
-  if (S.get(key("room:" + roomDid))) { await openRoom(roomDid); return; }
-
-  const mine = [];
-  try {
-    const where = await advertised(roomDid);
-    if (!where) {
-      log(`${roomDid} advertises no mediator, so there is nowhere to ask to join. A `
-        + `did:key room can be verified but not reached — only a method with a service `
-        + `block can say where its owner listens.`);
-      return;
-    }
-    mine.push(`resolved the room — it listens at ${where.mediator}, over `
-      + `${[where.tsp && "TSP", where.didcomm && "DIDComm"].filter(Boolean).join(" and ")}`);
-
-    log("opening a connection to the room's mediator…");
-    // Reused for the rest of the page: one socket per mediator is what a mediator allows,
-    // and the room's host is usually reachable through the same one.
-    const { link, carrier } = await connect(roomDid);
-    mine.push(`transport identity minted — ${link.transportDid.slice(0, 32)}…`);
-    mine.push(`connected over ${carrier === "tsp" ? "TSP" : "DIDComm"} — one socket, which `
-      + `is all a mediator gives per DID`);
-
-    // 1 · Ask. Signed by the room key in wasm, naming the transport identity, so the owner
-    //     can bind what was signed to the connection it arrived on.
-    log("asking the room's owner for an invitation…");
-    const invitation = (await requestInvitation(link, carrier, roomDid, identity)).invitation;
-    const vic = JSON.stringify(invitation);
-    mine.push("invitation received — from the room, not from this site");
-
-    // 2 · Check it before acting on it. The same six clauses, in the same wasm.
-    //
-    //     `key` is the room's own signing key, and it is only ever needed for a method that
-    //     does not carry one — a `did:webvh` room, which is what production mints. For a
-    //     `did:key` or a `did:peer` this is null and the gate derives the key itself, so
-    //     nothing this page believes about the room can affect the verdict.
-    // Named `roomSigningKey`, not `key`: this function already uses `key(suffix)` to build
-    // storage keys, and shadowing it made a working join fail with "key is not a function"
-    // several lines later — a long way from the declaration that caused it.
-    const roomSigningKey = await issuerKey(roomDid);
-    const credentialId = verifyInvitation(vic, roomDid, me.did, spent(), roomSigningKey);
-    mine.push("invitation verified — issued by this room, to me, signed by its own key, unspent");
-
-    // 3 · Mint a KeyPackage, gated on that invitation.
-    const minted = mintKeyPackage(me.did, roomDid, vic, spent(), roomSigningKey);
-    const { keyPackage } = JSON.parse(minted);
-    mine.push("key package minted — one per room, never reused");
-
-    // 4 · Present both.
-    log("presenting the invitation and a key package…");
-    const out = await requestAdmission(link, carrier, roomDid, identity, keyPackage, invitation);
-
-    // 5 · Accept the Welcome.
-    member = RoomMember.join(roomDid, minted, b64u.dec(out.welcome), vic, spent(), roomSigningKey);
-    markSpent(credentialId);
-    currentRoomDid = roomDid;
-    mine.push("welcome accepted in this tab — the group key never left the owner unsealed");
-    mine.push("invitation spent — it will not work a second time");
-
-    // No slug anywhere any more: nothing routes on one. The host is recorded because
-    // admission says nothing about where records live — a room's owner and its host are two
-    // parties, and a room may be served by several hosts, so its identifier deliberately
-    // names none of them. From the link if there is one, else from the catalogue.
-    S.set(key("room:" + roomDid), {
-      snapshot: member.snapshot(), roomDid,
-      host: roomFromUrl()?.host ?? hostForDid(roomDid) ?? SAMPLE_HOST,
-      membership: out.membership, authority: out.authority,
-    });
-
-    const rungs = await fetchChain().catch(() => 0);
-    if (rungs) {
-      mine.push(`epoch key chain fetched — ${rungs} rung(s), so the room's history opens`);
-      S.set(key("room:" + roomDid), {
-        ...S.get(key("room:" + roomDid)), snapshot: member.snapshot(),
-      });
-    }
-
-    $("steps").innerHTML =
-        `<li class="who">the owner, over ${carrier === "tsp" ? "TSP" : "DIDComm"}</li>` + out.steps.map(s => `<li>${s}</li>`).join("")
-      + `<li class="who">this browser</li>` + mine.map(s => `<li>${s}</li>`).join("");
-    $("join-panel").classList.remove("hide");
-    showEpochs();
-    await loadRecords();
-    await loadRooms();
-    log("");
-  } catch (e) {
-    log("could not join: " + (e.message ?? e));
-  }
-}
-
-async function openRoom(roomDid) {
-  const held = S.get(key("room:" + roomDid));
-  member = RoomMember.restore(held.snapshot);
-  currentRoomDid = roomDid;
-
-  const applied = await catchUp(held);
-  // Rungs minted while this member was away arrive the same way the commits did.
-  const rungs = await fetchChain().catch(() => 0);
-  if (applied || rungs) {
-    S.set(key("room:" + roomDid), {
-      ...S.get(key("room:" + roomDid)), snapshot: member.snapshot(),
-    });
-  }
-  $("steps").innerHTML = "<li>restored from this browser — no key left it</li>"
-    + (applied
-        ? `<li>applied ${applied} commit(s) — somebody joined while you were away</li>`
-        : "")
-    + (rungs ? `<li>epoch key chain: ${rungs} rung(s)</li>` : "");
-  $("join-panel").classList.remove("hide");
-  showEpochs();
-  await loadRecords();
-}
-
-/// Fetch the room's epoch key chain and hand it to this member.
-///
-/// **This is what makes a room's history readable.** Records are sealed under the epoch
-/// current when they were written, and a member joining at epoch 5 holds only epoch 5's
-/// key — so without this they can read what happens next and nothing that came before.
-/// Each rung seals one epoch's key under its successor's, and a holder of the current key
-/// walks *backwards* down them.
-///
-/// Backwards only, and that is the property rather than a limitation: a rung lets you go
-/// down from a key you hold, never up to one you do not, which is what keeps a removal
-/// forward-only. Somebody removed at epoch 7 cannot climb to 8.
-///
-/// Asked of the **host**, which stores the rungs as ciphertext it cannot read — the key
-/// that opens one is the storage key of the epoch it names, and no host ever holds that.
-/// What a host learns from a rung is that an epoch happened, which it knew already.
-async function fetchChain() {
-  const { links } = await hostTask(
-    "https://trusttasks.org/spec/rooms/epoch/chain/0.1", "read", {});
-  if (!links?.length) return 0;
-  member.addLinks(JSON.stringify(links));
-  return links.length;
-}
-
-/// Apply every commit made since this member last looked.
-///
-/// **Not optional, and done before anything is read.** Every membership change is a commit
-/// and every commit advances the epoch; a member who misses one is stuck at their last
-/// epoch and can open nothing sealed after it. The symptom is "this record does not open" —
-/// which reads as corruption rather than as a message that never arrived, and is why this
-/// runs on open rather than waiting for somebody to press something.
-///
-/// A pull, because a tab has no inbox. In the real design the commit is pushed to a
-/// member's agent over DIDComm; the same inversion the invitation forced applies here.
-async function catchUp(held) {
-  // Commits come from the room's OWNER, not its host — a host stores ciphertext and has no
-  // opinion about who is in a room, so it has none to give. Asked over the same mediator the
-  // owner was reached at to be admitted, which is what makes this work for a room that was
-  // addressed rather than listed. It used to route on this sample's own slug, so a room you
-  // were handed a link to could never catch up: you would join, fall behind at the next
-  // admission, and find records refusing to open with nothing to say why.
-  const { link, carrier } = await connect(held.roomDid);
-  const commits = await requestCommits(link, carrier, held.roomDid, identity, member.epoch);
-  if (!commits.length) return 0;
-
-  for (const c of commits) {
-    // Each returns the epoch rung it produced. Applied in order — a commit is only
-    // meaningful against the epoch immediately before it.
-    member.applyCommit(b64u.dec(c.commit));
-  }
-  S.set(key("room:" + held.roomDid), { ...held, snapshot: member.snapshot() });
-  return commits.length;
-}
-
-function showEpochs() {
-  const held = S.get(key("room:" + currentRoomDid)) ?? {};
-  $("room-link").textContent =
-    `${location.origin}/#/room/${encodeURIComponent(currentRoomDid)}`
-    + (held.host ? `?at=${encodeURIComponent(held.host)}` : "");
-  $("epoch").firstChild.textContent = member.epoch;
-  $("earliest").firstChild.textContent = member.earliestReadableEpoch();
-}
-
-// ── records ────────────────────────────────────────────────────────────────
-//
-// These go to the room's HOST, not to the sample room's own API — a real
-// `POST /trust-tasks`, and the same one a VTC serves. Two things travel with every
-// request and the host takes nothing else from it:
-//
-//   - the **presenter**, from the document's own `eddsa-jcs-2022` proof. Never from a
-//     payload field: a presentation says what may be done, not who is doing it, so an
-//     unbound one is a bearer token anyone observing it inherits.
-//   - the **chain**, minted here per request and narrowed to exactly one action.
-//
-// Both are produced in wasm, by the key this page never sees.
-
-/// Where the sample room's host is. A *default*, not a constant: a room carries its own
-/// host, and this is only what the catalogue's rooms happen to use.
-/// Where to look for a room's host when nobody has said.
-///
-/// Nobody usually has to: a listed room carries its host in the catalogue, and an addressed
-/// one carries it in `?at=`. This is only the gap between them.
-///
-/// **Only on loopback.** A hardcoded `http://127.0.0.1:8300` used to be the fallback
-/// everywhere, which is wrong the moment this page is served over TLS: the browser blocks a
-/// plaintext request from an https origin as mixed content, and the error names the content
-/// policy rather than the missing address. Off loopback there is no sensible guess, so the
-/// site says what it needs instead of guessing wrongly.
-const SAMPLE_HOST =
-  location.hostname === "127.0.0.1" || location.hostname === "localhost"
-    ? "http://127.0.0.1:8300"
-    : null;
-
-/// A room is addressed, never configured.
-///
-/// `#/room/<roomDid>?at=<host url>` — paste one of those and this site works against a room
-/// it has never seen, on a host it does not know, provided you hold credentials for it.
-/// That is the whole of "one site, any number of rooms", and it is why nothing below reads
-/// a room out of a constant.
-///
-/// The **records** half genuinely works this way, because a host needs nothing but the
-/// request: a signed document and a chain the room issued. **Admission** does not, and
-/// cannot yet — it needs the room's owner, who is reachable over DIDComm at the mediator
-/// the room advertises, and a `did:key` room advertises nothing. Named here rather than
-/// hidden, because the difference is the honest boundary of what this demonstrates.
-function roomFromUrl() {
-  const m = location.hash.match(/^#\/room\/([^?]+)(?:\?(.*))?$/);
-  if (!m) return null;
-  const params = new URLSearchParams(m[2] ?? "");
-  return { roomDid: decodeURIComponent(m[1]), host: params.get("at") ?? SAMPLE_HOST ?? null };
-}
-
-/// Send one Trust Task to the host, signed, carrying a presentation for `action`.
-async function hostTask(type, action, payload) {
-  const held = S.get(key("room:" + currentRoomDid));
-
-  // Minting the presentation can fail, and when it does the request is never made.
-  // `attenuate` refuses to widen, so asking for an action the room did not grant fails
-  // HERE — in your own key holder — rather than at the host. That is worth distinguishing
-  // on screen: "you were never given this" and "the host disagreed" are different
-  // sentences, and only the first can be answered by asking the owner.
-  let presentation;
-  try {
-    presentation = JSON.parse(identity.present(
-      JSON.stringify(held.authority),
-      JSON.stringify(held.membership),
-      action,
-      null,          // no challenge: this host issues none. A nonce is the verifier's.
-    ));
-  } catch (e) {
-    const err = new Error(e.message ?? String(e));
-    err.refusedLocally = true;
-    throw err;
-  }
-
-  const document = {
-    id: `urn:uuid:${crypto.randomUUID()}`,
-    type,
-    issuedAt: new Date().toISOString().replace(/\.\d+Z$/, "Z"),
-    payload: { roomId: currentRoomDid, presentation, ...payload },
-  };
-  const signed = identity.signDocument(JSON.stringify(document));
-
-  // **The same bytes, whichever way they travel.** A host takes the presenter from this
-  // document's own proof and the authority from the chain inside it, so a request is exactly
-  // as authorized over a socket as over a POST — the carrier authenticates its sender and
-  // that confers nothing. Which is why this is one signature and two ways to post it, rather
-  // than two request paths.
-  const where = held.host ?? SAMPLE_HOST;
-  if (!where) {
-    throw new Error(
-      "nothing has said where this room's records live — a room's identifier deliberately "
-        + "does not name a host, so the catalogue or the link has to. Add `?at=<host did or "
-        + "url>` to the address.",
-    );
-  }
-  const answer = where.startsWith("did:")
-    ? await hostOverMediator(where, JSON.parse(signed))
-    : await hostOverHttp(where, signed);
-
-  // The answer is the document, and it says for itself whether it is one. `trust-task-error`
-  // is the framework's own marker; over HTTP the status says the same thing a second time,
-  // and over a socket there is no status to say it — so the document is what both read.
-  if (String(answer.type ?? "").includes("trust-task-error")) {
-    const p = answer.payload ?? {};
-    // A host's refusal is its ANSWER, not a broken network — shown in the host's own words.
-    throw new Error(p.reason ?? p.message ?? p.code ?? JSON.stringify(answer));
-  }
-  return answer.payload;
-}
-
-/// Post a signed Trust Task to a host at a URL.
-async function hostOverHttp(host, signed) {
-  const res = await fetch(`${host}/trust-tasks`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: signed,
-  });
-  const body = await res.json().catch(() => null);
-  if (!body) throw new Error(`the host at ${host} answered with nothing readable`);
-  return body;
-}
-
-/// Send a signed Trust Task to a host reachable only at a mediator.
-///
-/// **What this buys is reach, not authority.** A URL address needs the host to be somewhere a
-/// member's browser is allowed to open — a public name, a certificate, an origin on its
-/// allow-list. A DID address needs none of that: both sides dial a mediator and neither has
-/// to be reachable by the other. A host behind NAT, on a laptop, or on an origin no browser
-/// would be permitted to call is reached exactly like a phone is.
-///
-/// A Trust Task already has a binding for each carrier, so nothing is invented here: the
-/// DIDComm one wraps the document under a single reserved envelope type, and the TSP one is
-/// the document itself, byte-identical to the body that would have been POSTed.
-async function hostOverMediator(hostDid, document) {
-  const { link, carrier } = await connect(hostDid);
-  return await link.askTrustTask(hostDid, carrier, document);
-}
-
-/// List, then fetch each record./// List, then fetch each record.
-///
-/// Two calls because they are two questions. `list` answers "what is in this room" and
-/// returns **metadata only, never bodies** — a host that returned content on a list would
-/// be handing out every record to anyone entitled to see that records exist. `get` answers
-/// "give me this one", and only then does ciphertext move.
-async function loadRecords() {
-  let recs;
-  try {
-    const listed = (await hostTask(
-      "https://trusttasks.org/spec/rooms/records/list/0.1", "read", {})).records ?? [];
-    recs = [];
-    for (const meta of listed) {
-      const got = await hostTask(
-        "https://trusttasks.org/spec/rooms/records/get/0.1", "read", { key: meta.key });
-      // `sealed` is a `SealedContent` — ciphertext, nonce and epoch together — which is what
-      // the schema always specified and what a host now sends.
-      //
-      // This used to reassemble it from flat members, because that is what hosts actually
-      // sent: a read was answered by serialising the *storage* record, where `sealed` is a
-      // bare base64 string. VTI #1368 gave the task a response type, and the workaround
-      // became the bug. Worth remembering as the general case: code written against a defect
-      // breaks when the defect is fixed, and it breaks quietly — here, as a record that
-      // stores and lists but will not open.
-      recs.push({ ...meta, ...got });
-    }
-  } catch (e) { log("the host refused the read: " + e.message); return; }
-  $("records-panel").classList.remove("hide");
-  const box = $("records");
-  box.innerHTML = "";
-  if (!recs.length) { box.innerHTML = `<p style="color:var(--muted)">Nothing written yet.</p>`; return; }
-  for (const r of recs) {
-    const el = document.createElement("div");
-    el.className = "card";
-    el.style.marginBottom = ".6rem";
-    // A retracted record is a TOMBSTONE: the body is gone, the key and version stay, so
-    // the room's history still shows that something was here and is not any more. There is
-    // nothing to open, and trying reports a missing `ciphertext` — which reads as
-    // corruption rather than as the record having been withdrawn on purpose.
-    const retracted = r.status && r.status !== "active";
-
-    let plaintext = null;
-    let why = null;
-    if (!retracted) {
-      try {
-        plaintext = new TextDecoder().decode(
-          member.openRecord(r.key, BigInt(r.version), JSON.stringify(r.sealed)));
-      } catch (e) {
-        why = String(e.message ?? e);
-      }
-    }
-    el.innerHTML = `<div class="row" style="justify-content:space-between">
-        <strong>${r.key}</strong>
-        <span style="color:var(--muted);font-size:12px">v${r.version} · epoch ${r.sealed.epoch}</span>
-      </div>
-      <p style="margin:.5rem 0">${
-        retracted
-          ? `<em style="color:var(--seal)">${r.status} — the body is gone; the key and
-             version stay, so the room still shows something was here</em>`
-          : plaintext !== null
-            ? plaintext.replace(/[<>&]/g, c => ({"<":"&lt;",">":"&gt;","&":"&amp;"}[c]))
-            : `<em style="color:var(--seal)">did not open — ${why}</em>`
-      }</p>
-      ${retracted ? "" : `<details><summary style="cursor:pointer;color:var(--muted);font-size:13px">what the host has</summary>
-        <div class="cipher mono">${r.sealed.ciphertext}</div></details>`}`;
-    if (!retracted) {
-    const retract = document.createElement("button");
-    retract.className = "ghost";
-    retract.style.marginTop = ".6rem";
-    retract.textContent = "Retract";
-    retract.onclick = () => curate(r.key);
-    el.append(retract);
-    }
-    box.append(el);
-  }
-}
-
-/// Retract a record — which needs `curate`, an action `write` does not imply.
-///
-/// The Library grants `read` and `write`; the Workshop also grants `curate`. Same button in
-/// both, and in the Library it never reaches the network: `attenuate` refuses to widen what
-/// the room gave you, so your own key holder declines to mint a presentation for an action
-/// you were not granted.
-async function curate(key) {
-  try {
-    await hostTask("https://trusttasks.org/spec/rooms/records/curate/0.1", "curate", {
-      key, status: "retracted", reason: "retracted from the demo",
-    });
-  } catch (e) {
-    log(e.refusedLocally
-      ? `refused here, and never sent: ${e.message} — ask the room's owner for it, `
-        + `there is nothing the host could have done`
-      : `the host refused: ${e.message}`);
-    return;
-  }
-  log("");
-  await loadRecords();
-}
-
-async function write() {
-  const key = $("rec-key").value.trim();
-  const body = $("rec-body").value;
-  if (!key) { log("a record needs a key"); return; }
-
-  // **Ask what version this will be, then seal against the answer.**
-  //
-  // Versions are monotonic **per room**, not per record — the host allocates the room's
-  // `next_version` to whatever is written next, whichever key it is under. So the second
-  // record in a room is version 2 even though it is that key's first.
-  //
-  // This mattered because the version is bound *into* the ciphertext along with the room,
-  // the key and the epoch. Sealing against a guess stores fine and never opens, and the
-  // symptom is a record that lists correctly and then refuses — which reads as corruption
-  // rather than as a number that was wrong before it was written. This used to pass `1`,
-  // and so the first record in any room worked and every one after it did not.
-  //
-  // Derived from the listing rather than from a counter this page keeps, because the page's
-  // count is only its own writes and any other member's would be missing from it.
-  let nextVersion;
-  try {
-    const listed = (await hostTask(
-      "https://trusttasks.org/spec/rooms/records/list/0.1", "read", {})).records ?? [];
-    nextVersion = listed.reduce((m, r) => Math.max(m, Number(r.version ?? 0)), 0) + 1;
-  } catch (e) { log("could not read the room before writing: " + e.message); return; }
-
-  // There is a race here and it is worth naming: two members sealing against the same
-  // answer both get it, and the second one's record stores and never opens. `expectedVersion`
-  // guards the *key*, not the room's counter, so nothing catches it. A real client re-reads
-  // and re-seals on conflict; a two-person demo says so instead.
-  const sealed = JSON.parse(
-    member.sealRecord(key, BigInt(nextVersion), new TextEncoder().encode(body)));
-
-  try {
-    // `write`, not `read`. The presentation is narrowed to exactly this action, and a
-    // member holding only `read` is refused by their own `attenuate` before the host
-    // ever sees it.
-    // `expectedVersion: 0` is create-only — "this key does not exist yet" — and is about
-    // the key, where the number sealed above is about the room. Two different questions that
-    // both happen to be spelled as a version.
-    await hostTask("https://trusttasks.org/spec/rooms/records/put/0.1", "write", {
-      key, sealed, expectedVersion: 0,
-    });
-  } catch (e) { log("the host refused the write: " + e.message); return; }
-
-  $("rec-key").value = ""; $("rec-body").value = "";
-  log("");
-  // After the log is cleared, not before: `loadRecords` reports its own failures there,
-  // and clearing afterwards swallowed them — which is how a working write looked like a
-  // silently empty room.
-  await loadRecords();
-}
-
-for (const name of WHO) {
-  const b = $("who-" + name);
-  b.onclick = async () => {
-    who = name;
-    S.set("dr:who", who);
-    // The socket is authenticated as one transport DID, and a different member is a
-    // different party. Dropped rather than reused, so nobody inherits somebody else's link.
-    closeLinks();
-    transport = null;
-    load();
-    renderIdentity();
-    // Panels belong to the identity that opened them.
-    $("join-panel").classList.add("hide");
-    $("records-panel").classList.add("hide");
-    log("");
-    if (me) await loadRooms();
-  };
-}
-
-$("mint").onclick = mint;
-$("forget").onclick = () => {
-  if (!confirm(`This destroys ${who}'s key and every room it joined. There is no recovery.`)) return;
-  for (const k of Object.keys(localStorage)) if (k.startsWith(`dr:${who}:`)) S.del(k);
-  me = null; member = null; identity = null;
-  $("join-panel").classList.add("hide"); $("records-panel").classList.add("hide");
-  renderIdentity();
-};
-$("write").onclick = write;
-$("join-by-did").onclick = () => joinByDid($("by-did").value);
-$("by-did").onkeydown = (e) => { if (e.key === "Enter") joinByDid($("by-did").value); };
-
-renderIdentity();
-if (me) await loadRooms();
-
-// A link is an address. Handle it on arrival and whenever it changes, so pasting one into
-// the bar does what pressing a card does.
-addEventListener("hashchange", () => { openAddressedRoom(); });
-await openAddressedRoom();
-</script>
+<footer class="site-footer">
+  <div class="footer-inner">Keys live in this browser's storage for the demo. Nothing here is mocked: real credentials,
+    real MLS group keys, real encryption, a real host and mediator.</div>
+</footer>
+<script type="module" src="app.js"></script>

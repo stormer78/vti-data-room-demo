@@ -1,0 +1,913 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Data rooms — demo</title>
+<style>
+  :root {
+    --bg: #fbfaf8; --panel: #fff; --ink: #17181a; --muted: #6a6d73;
+    --line: #e3e0da; --accent: #3a5f9e; --seal: #7a5230; --ok: #2f6b4f;
+    --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#141517; --panel:#1c1e21; --ink:#e9e7e3; --muted:#9a9da3;
+            --line:#2c2f33; --accent:#8fb0e6; --seal:#c9a37a; --ok:#7fc4a1; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink);
+         font:15px/1.55 ui-sans-serif, system-ui, -apple-system, sans-serif; }
+  main { max-width: 62rem; margin: 0 auto; padding: 2rem 1.25rem 5rem; }
+  h1 { font-size:1.5rem; margin:0 0 .25rem; letter-spacing:-.01em; }
+  h2 { font-size:1rem; margin:0 0 .75rem; letter-spacing:.02em;
+       text-transform:uppercase; color:var(--muted); font-weight:600; }
+  p { margin:.5rem 0; }
+  .sub { color:var(--muted); margin-bottom:2rem; }
+  section { background:var(--panel); border:1px solid var(--line); border-radius:10px;
+            padding:1.25rem; margin-bottom:1.25rem; }
+  button { font:inherit; padding:.5rem .9rem; border-radius:7px; cursor:pointer;
+           border:1px solid var(--accent); background:var(--accent); color:#fff; }
+  button.ghost { background:transparent; color:var(--accent); }
+  button:disabled { opacity:.45; cursor:not-allowed; }
+  input, textarea { font:inherit; padding:.5rem .6rem; border-radius:7px;
+                    border:1px solid var(--line); background:var(--bg); color:var(--ink); width:100%; }
+  textarea { font-family:var(--mono); font-size:13px; min-height:5rem; }
+  code, .mono { font-family:var(--mono); font-size:12.5px; word-break:break-all; }
+  .warn { border-left:3px solid var(--seal); padding-left:.9rem; color:var(--muted); }
+  .row { display:flex; gap:.6rem; flex-wrap:wrap; align-items:center; }
+  .grid { display:grid; gap:.75rem; grid-template-columns:repeat(auto-fill,minmax(15rem,1fr)); }
+  .card { border:1px solid var(--line); border-radius:8px; padding:.85rem; }
+  .steps { list-style:none; padding:0; margin:.75rem 0 0; }
+  .steps li { padding:.3rem 0 .3rem 1.4rem; position:relative; color:var(--muted); }
+  .steps li::before { content:"✓"; position:absolute; left:0; color:var(--ok); }
+  .steps li.who { padding-left:0; margin-top:.6rem; font-size:.75rem; font-weight:600;
+                  text-transform:uppercase; letter-spacing:.05em; color:var(--ink); }
+  .steps li.who::before { content:""; }
+  .steps li.who:first-child { margin-top:0; }
+  .epochs { display:flex; gap:1.5rem; margin-top:.5rem; }
+  .epochs div { font-size:1.6rem; font-weight:600; line-height:1; }
+  .epochs span { display:block; font-size:.75rem; color:var(--muted);
+                 text-transform:uppercase; letter-spacing:.04em; margin-top:.3rem; font-weight:400; }
+  .cipher { background:var(--bg); border:1px dashed var(--line); border-radius:6px;
+            padding:.6rem; margin-top:.5rem; overflow-x:auto; }
+  .hide { display:none; }
+  #log { color:var(--muted); font-size:13px; margin-top:1rem; }
+  #log:empty { display:none; }
+  #log div { padding:.15rem 0; }
+  #log div.err { color:#b00020; font-weight:600; }
+</style>
+
+<main>
+  <h1>Data rooms</h1>
+  <p class="sub">Mint your own key in this tab, join a room, and read and write records
+    the host stores but cannot read.</p>
+
+  <section id="identity-panel">
+    <h2>1 · Who you are</h2>
+    <p id="did-line" class="muted">No identity in this browser yet.</p>
+    <div class="row">
+      <button id="mint" disabled>Loading…</button>
+      <button id="forget" class="ghost hide">Forget it</button>
+      <span style="flex:1"></span>
+      <span style="color:var(--muted);font-size:13px">acting as</span>
+      <button id="who-alice" class="ghost">alice</button>
+      <button id="who-bob" class="ghost">bob</button>
+    </div>
+    <p class="sub" style="margin:.6rem 0 0">Two identities in this browser, both real —
+      separate keys, separate MLS leaves, separate snapshots. Switching is not a filter on
+      a view; it is being somebody else. Join a room as each, and watch what the first has
+      to do to keep reading once the second arrives.</p>
+    <p class="warn" style="margin-top:1rem">
+      This key lives in this browser and nowhere else. Clearing site data destroys it, and
+      with it every room you joined — nobody can re-issue it for you. That is the point,
+      and it is also the risk.
+    </p>
+  </section>
+
+  <section id="rooms-panel" class="hide">
+    <h2>2 · Rooms</h2>
+    <div id="rooms" class="grid"></div>
+    <div style="margin-top:1.25rem;border-top:1px solid var(--line);padding-top:1rem">
+      <p class="sub" style="margin:0 0 .6rem">Or join one this site has never heard of.
+        Paste a room's DID: if it is a <code>did:peer:2</code> it carries the mediator its
+        owner listens on, and everything else follows from that one lookup — no host URL, no
+        catalogue, no configuration.</p>
+      <div class="row">
+        <input id="by-did" placeholder="did:peer:2.Vz6Mk…" style="flex:1">
+        <button id="join-by-did">Ask to join</button>
+      </div>
+    </div>
+    <div id="log" aria-live="polite"></div>
+  </section>
+
+  <section id="join-panel" class="hide">
+    <h2>3 · How you got in</h2>
+    <p class="sub" style="margin:0">Admission is a two-party act, and both halves are
+      shown. The owner decides and issues; this browser checks before it acts on anything.
+      Neither side's checks substitute for the other's — the owner's stop a forged
+      invitation adding a member, and yours stop your own key holder being filled with a
+      room you never agreed to join.</p>
+    <ul id="steps" class="steps"></ul>
+    <p class="sub" style="margin:.75rem 0 0">This room's address:
+      <code id="room-link" class="mono"></code> — a room is addressed, never configured, so
+      that link works in any browser holding keys for it, against a host this site has never
+      seen.</p>
+    <div class="epochs">
+      <div id="epoch">–<span>your epoch</span></div>
+      <div id="earliest">–<span>earliest readable</span></div>
+    </div>
+    <p class="sub" style="margin-top:.75rem">Two numbers, because they are different
+      repairs. Behind the room's epoch means a commit has not been delivered. Earliest
+      equal to current means the key chain has not arrived — you can read from where you
+      joined, not before.</p>
+  </section>
+
+  <section id="records-panel" class="hide">
+    <h2>4 · Records</h2>
+    <div class="row" style="margin-bottom:.75rem">
+      <input id="rec-key" placeholder="record key" style="max-width:14rem">
+      <button id="write">Seal &amp; write</button>
+    </div>
+    <textarea id="rec-body" placeholder="Write something. It is sealed in this tab before it leaves."></textarea>
+    <div id="records" style="margin-top:1rem"></div>
+  </section>
+
+  <section>
+    <h2>What is real here, and what is not</h2>
+    <p><strong>Real.</strong> Your key, minted and held in WebAssembly — this page never
+      sees the private half. The MLS group, the sealing and the epoch chain are
+      <code>vti-rooms</code> itself, the same crate the services link. The invitation, the
+      membership and the authority are DTG credentials the room signed. Every record
+      operation goes to <strong>the real <code>room-host</code></strong> as a signed Trust
+      Task, and it authorises each one against a chain narrowed to that single action —
+      <code>read</code> to list, <code>write</code> to store. It stores ciphertext and has
+      no code path that could read it.</p>
+    <p><strong>And none of it needs a URL.</strong> A room says which mediator its owner
+      listens on, and this page reaches both that owner and the room's host through it — over
+      TSP where they offer it, DIDComm where they do not. So the site works against a room and
+      a host it has never seen, neither of which has to be somewhere your browser is allowed
+      to call. What that buys is reach, not authority: the host still takes who you are from
+      the signature on each request and what you may do from the chain the room issued, so
+      the same bytes would be exactly as authorised had they gone over HTTP.</p>
+    <p>You hold <strong>two keys</strong>, and they do different jobs. The one above is your
+      room identity: it lives in wasm, signs everything, and is what the room's credentials
+      name. The other is a throwaway address the mediator delivers to, minted fresh each
+      session. Every request carries a proof of each, and names the second inside the first —
+      so a signed request cannot be picked up and replayed by somebody else's connection.</p>
+    <p><strong>Try this first.</strong> Join a room as <code>alice</code>, write something,
+      then switch to <code>bob</code> and join too. Bob reads what Alice wrote before he
+      arrived — not because the host handed him anything readable, but because he walked
+      the <em>epoch key chain</em>: each rung seals one epoch's key under its successor's,
+      and a holder of the current key walks backwards down them. Watch
+      <code>earliest readable</code> go to 1 the moment the rungs arrive.</p>
+    <p>Backwards only, and that is the property rather than a limit: a rung lets you go down
+      from a key you hold, never up to one you do not — which is what makes a removal
+      forward-only. Somebody removed at epoch 7 cannot climb to 8.</p>
+    <p><strong>Then this.</strong> Retract a record in each room. The Workshop grants
+      <code>curate</code> and the Library does not, so the same button works in one and is
+      refused in the other — refused <em>in this tab</em>, before any request is made,
+      because <code>attenuate</code> will not widen what the room gave you. "You were never
+      given this" and "the host disagreed" are different sentences, and only the first can
+      be answered by asking the owner.</p>
+    <p><strong>Standing in.</strong> The owner. In a real room that is a person with an
+      agent, deciding; here it admits anyone who asks and says so. What it issues is not
+      pretended — the credentials are real and the ceremony is the same either side of the
+      decision.</p>
+    <p><strong>Deliberately absent.</strong> The <code>private</code> tier, whose subject
+      binding needs a zero-knowledge profile the working group has not settled — a demo
+      tier that quietly behaved like this one would misrepresent it.</p>
+  </section>
+</main>
+
+<script type="module">
+import init, { mintKeyPackage, verifyInvitation, Identity, RoomMember } from "./vendor/vti_rooms.js";
+import { requestAdmission, requestCommits, requestInvitation } from "./admission.js";
+import { advertised, closeLinks, issuerKey, linkTo, mintTransportIdentity } from "./carrier.js";
+
+// The module is ~1.9 MB and every handler below depends on it, so the buttons stay
+// disabled until it is ready. Without this the page looks finished before it is, and a
+// click in that window does nothing at all — which reads as broken rather than as slow.
+await init();
+document.getElementById("mint").disabled = false;
+document.getElementById("mint").textContent = "Mint a did:key";
+
+const $ = (id) => document.getElementById(id);
+// Appends, so a join reads as the sequence of steps it took; `joinByDid` clears it first.
+// An empty message clears. Errors are marked and scrolled to, since a failure that stays
+// off-screen looks exactly like a button that does nothing.
+const log = (m, isErr = false) => {
+  const el = $("log");
+  if (!m) { el.textContent = ""; return; }
+  const row = document.createElement("div");
+  if (isErr) row.className = "err";
+  row.textContent = m;
+  el.append(row);
+  console.log("[join]", m);
+  if (isErr) row.scrollIntoView({ block: "nearest" });
+};
+
+// `did:key` derivation lives in wasm now, beside the key it derives from — so does
+// signing, so the private half never reaches this file.
+const b64u = {
+  enc: (b) => btoa(String.fromCharCode(...b)).replace(/\+/g,"-").replace(/\//g,"_").replace(/=+$/,""),
+  dec: (s) => Uint8Array.from(atob(s.replace(/-/g,"+").replace(/_/g,"/")), c => c.charCodeAt(0)),
+};
+
+// ── storage ────────────────────────────────────────────────────────────────
+// localStorage, deliberately: this is a demo and the snapshot is small. A real
+// wallet keeps it in IndexedDB behind a non-extractable key. Both are per-origin
+// and per-browser; neither reaches us.
+const S = {
+  get: (k) => { try { return JSON.parse(localStorage.getItem(k) ?? "null"); } catch { return null; } },
+  set: (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} },
+  del: (k) => { try { localStorage.removeItem(k); } catch {} },
+};
+
+let identity = null;               // the wasm-held signing identity
+let me = null;                     // { did } — the public half, for display
+let member = null;                 // a live RoomMember
+let currentRoomDid = null;
+
+// Several identities in one browser, because a room with one member demonstrates
+// nothing about a room. Each is a real `did:key` with its own MLS leaf and its own
+// snapshots — switching is not a view filter, it is being somebody else.
+const WHO = ["alice", "bob"];
+let who = S.get("dr:who") ?? WHO[0];
+const key = (suffix) => `dr:${who}:${suffix}`;
+
+function load() {
+  const saved = S.get(key("identity"));
+  identity = saved ? Identity.restore(saved) : null;
+  me = identity ? { did: identity.did } : null;
+  member = null; currentRoomDid = null;
+}
+load();
+
+/// Invitations this browser has already spent. The member's own half of single-use.
+const spent = () => JSON.stringify(S.get(key("spent")) ?? []);
+const markSpent = (id) => S.set(key("spent"), [...(S.get(key("spent")) ?? []), id]);
+
+// The key is minted and held in wasm; this page never sees the private half. The
+// snapshot is key material all the same — it is what restores the identity — so it
+// lives in per-origin storage and goes nowhere else.
+async function mint() {
+  identity = Identity.mint();
+  S.set(key("identity"), identity.snapshot());
+  me = { did: identity.did };
+  renderIdentity();
+  await loadRooms();
+  // Pick the link back up. Somebody who arrived by one has already said which room they
+  // want; making them ask again would be forgetting it.
+  await openAddressedRoom();
+}
+
+function renderIdentity() {
+  for (const name of WHO) {
+    const b = $("who-" + name);
+    b.className = name === who ? "" : "ghost";
+  }
+  if (!me) {
+    $("did-line").textContent = `No identity for ${who} in this browser yet.`;
+    $("mint").classList.remove("hide"); $("forget").classList.add("hide");
+    $("rooms-panel").classList.add("hide");
+    return;
+  }
+  $("did-line").innerHTML = `You are <strong>${who}</strong> — <code>${me.did}</code>`;
+  $("mint").classList.add("hide"); $("forget").classList.remove("hide");
+  $("rooms-panel").classList.remove("hide");
+}
+
+/// This page's transport identity, minted once and shared by every link.
+///
+/// One rather than one per conversation: a mediator addresses a DID and permits it one
+/// socket, so two identities would mean two sockets to the same mediator for the same person
+/// — and the mediator would evict one of them.
+let transport = null;
+
+/// A link to whoever `did` is, and the carrier they say they serve.
+///
+/// The link is per **mediator**, not per party: a room's owner and its host are usually on
+/// the same one, and one socket is what a mediator allows. Reused across the page.
+async function connect(did) {
+  transport ??= mintTransportIdentity();
+  const found = await linkTo(did, transport);
+  if (!found) {
+    throw new Error(
+      `${did} advertises nowhere to reach it — a did:key can be verified but not dialled`,
+    );
+  }
+  return found;
+}
+
+/// Open a room named in the URL rather than listed by the sample.
+///
+/// Works when this browser already holds keys for it — which is the case that matters,
+/// because it is the one that proves the site is a client rather than a front end for the
+/// room shipped beside it. Everything the room panel does from here is host-only: list,
+/// get, put, curate, and the epoch chain.
+///
+/// And when this browser holds no keys for it, it asks. Admission needs the room's owner,
+/// and reaching one this site was never told about means resolving the room's DID to a
+/// mediator and speaking DIDComm — which is what [`joinByDid`] does. A `did:key` room still
+/// cannot be reached this way, because it has no service block to say where anyone listens;
+/// that is said plainly rather than offered and then failing.
+async function openAddressedRoom() {
+  const addressed = roomFromUrl();
+  if (!addressed) return false;
+  // Handed a link before there is anybody to be handed it. Say so and remember it: a room
+  // is joined by *somebody*, and silence here reads as a link that did not work.
+  if (!me) {
+    log("you were given a room, but this browser has no key yet — mint one and it will "
+      + "carry on from here");
+    return false;
+  }
+
+  const held = S.get(key("room:" + addressed.roomDid));
+  if (!held) {
+    // Not a dead end any more. If the room says where its owner listens, ask — which is
+    // the whole of being handed a link to a room this site has never seen.
+    await joinByDid(addressed.roomDid);
+    return true;
+  }
+  // The host from the link wins: a room may move, and the address you were given is more
+  // current than the one you stored when you joined.
+  if (addressed.host && addressed.host !== held.host) {
+    S.set(key("room:" + addressed.roomDid), { ...held, host: addressed.host });
+  }
+  await openRoom(addressed.roomDid);
+  return true;
+}
+
+// ── rooms ──────────────────────────────────────────────────────────────────
+//
+// A room has two names here and they are not interchangeable. Its **DID** is its
+// identifier: what its credentials are issued by, what a record's ciphertext is bound
+// to, what `vti-rooms` means by `roomId`. The **slug** is a path segment this sample
+// room happens to route on, and nothing in the trust model knows about it.
+//
+// Conflating them is not cosmetic — it was caught here by the invitation check, which
+// refused a perfectly good invitation on the grounds that `demo-library` had not issued
+// it. That refusal was correct.
+/// The catalogue as this page last read it, so a join knows where the room's records live.
+///
+/// A room's identifier deliberately does not name its host — a room may be served by several,
+/// and one that named its host could never move — so somebody has to say. For a listed room
+/// that is the catalogue; for an addressed one it is the `?at=` in the link.
+let catalogue = [];
+const hostForDid = (roomDid) => catalogue.find((r) => r.roomDid === roomDid)?.host;
+
+async function loadRooms() {
+  const rooms = await (await fetch("/api/rooms")).json();
+  catalogue = rooms;
+  $("rooms").innerHTML = "";
+  for (const r of rooms) {
+    const held = S.get(key("room:" + r.roomDid));
+    const el = document.createElement("div");
+    el.className = "card";
+    el.innerHTML = `<strong>${r.label}</strong>
+      <p class="mono" style="color:var(--muted);margin:.35rem 0">${r.roomId}</p>
+      <p style="color:var(--muted);font-size:13px">epoch ${r.epoch} · ${r.members} member(s)</p>
+      <p style="color:var(--muted);font-size:13px">grants <code>${r.grants.join("</code>, <code>")}</code></p>`;
+    const b = document.createElement("button");
+    b.className = held ? "ghost" : "";
+    b.textContent = held ? "Open" : "Ask to join";
+    b.onclick = () => held ? openRoom(r.roomDid) : joinByDid(r.roomDid);
+    el.append(b);
+    $("rooms").append(el);
+  }
+}
+
+/// Join a room, knowing nothing but its DID.
+///
+/// **The only way in**, whether you clicked a card or pasted an identifier, and that is the
+/// point rather than a tidy-up. There used to be a second path over this site's own HTTP API,
+/// and it was the one a card used — so the common case took the weaker route. Weaker
+/// specifically: over HTTP the asker's DID is a claim, where here it is proved by the
+/// request's own signature and bound to the connection that carried it. Two admission
+/// implementations with different security properties is how the better one ends up unused.
+///
+/// What it needs from this site is nothing:
+///
+/// - the room is found by **resolving its identifier**, not by looking it up in a
+///   catalogue. A `did:peer:2` carries the mediator its owner listens on, and resolving one
+///   is arithmetic — no network, no registry.
+/// - the request is signed by the **room identity in wasm** and sent from a **transport
+///   identity in this file**, and it names the second so the owner can check they agree.
+///   Two proofs about two different things: who authored this, and who is on the other end
+///   of this connection.
+/// - the owner answers over the same connection, so nothing here needs a URL.
+///
+/// What stays identical is everything that matters: the same six invitation clauses run in
+/// the same wasm before a KeyPackage is minted, and the room's credentials name the same
+/// `did:key` they would have either way.
+async function joinByDid(roomDid) {
+  roomDid = roomDid.trim();
+  if (!roomDid) return;
+  log("");
+  if (!me) { log("mint an identity first — a room is joined by somebody"); return; }
+  if (S.get(key("room:" + roomDid))) { await openRoom(roomDid); return; }
+
+  const mine = [];
+  try {
+    const where = await advertised(roomDid);
+    if (!where) {
+      log(`${roomDid} advertises no mediator, so there is nowhere to ask to join. A `
+        + `did:key room can be verified but not reached — only a method with a service `
+        + `block can say where its owner listens.`);
+      return;
+    }
+    mine.push(`resolved the room — it listens at ${where.mediator}, over `
+      + `${[where.tsp && "TSP", where.didcomm && "DIDComm"].filter(Boolean).join(" and ")}`);
+
+    log("opening a connection to the room's mediator…");
+    // Reused for the rest of the page: one socket per mediator is what a mediator allows,
+    // and the room's host is usually reachable through the same one.
+    const { link, carrier } = await connect(roomDid);
+    log(`connected to the mediator — sending over ${carrier === "tsp" ? "TSP" : "DIDComm"}`);
+    mine.push(`transport identity minted — ${link.transportDid.slice(0, 32)}…`);
+    mine.push(`connected over ${carrier === "tsp" ? "TSP" : "DIDComm"} — one socket, which `
+      + `is all a mediator gives per DID`);
+
+    // 1 · Ask. Signed by the room key in wasm, naming the transport identity, so the owner
+    //     can bind what was signed to the connection it arrived on.
+    log("asking the room's owner for an invitation…");
+    const invitation = (await requestInvitation(link, carrier, roomDid, identity)).invitation;
+    const vic = JSON.stringify(invitation);
+    mine.push("invitation received — from the room, not from this site");
+
+    // 2 · Check it before acting on it. The same six clauses, in the same wasm.
+    //
+    //     `key` is the room's own signing key, and it is only ever needed for a method that
+    //     does not carry one — a `did:webvh` room, which is what production mints. For a
+    //     `did:key` or a `did:peer` this is null and the gate derives the key itself, so
+    //     nothing this page believes about the room can affect the verdict.
+    // Named `roomSigningKey`, not `key`: this function already uses `key(suffix)` to build
+    // storage keys, and shadowing it made a working join fail with "key is not a function"
+    // several lines later — a long way from the declaration that caused it.
+    const roomSigningKey = await issuerKey(roomDid);
+    const credentialId = verifyInvitation(vic, roomDid, me.did, spent(), roomSigningKey);
+    mine.push("invitation verified — issued by this room, to me, signed by its own key, unspent");
+
+    // 3 · Mint a KeyPackage, gated on that invitation.
+    const minted = mintKeyPackage(me.did, roomDid, vic, spent(), roomSigningKey);
+    const { keyPackage } = JSON.parse(minted);
+    mine.push("key package minted — one per room, never reused");
+
+    // 4 · Present both.
+    log("presenting the invitation and a key package…");
+    const out = await requestAdmission(link, carrier, roomDid, identity, keyPackage, invitation);
+
+    // 5 · Accept the Welcome.
+    member = RoomMember.join(roomDid, minted, b64u.dec(out.welcome), vic, spent(), roomSigningKey);
+    markSpent(credentialId);
+    currentRoomDid = roomDid;
+    mine.push("welcome accepted in this tab — the group key never left the owner unsealed");
+    mine.push("invitation spent — it will not work a second time");
+
+    // No slug anywhere any more: nothing routes on one. The host is recorded because
+    // admission says nothing about where records live — a room's owner and its host are two
+    // parties, and a room may be served by several hosts, so its identifier deliberately
+    // names none of them. From the link if there is one, else from the catalogue.
+    S.set(key("room:" + roomDid), {
+      snapshot: member.snapshot(), roomDid,
+      host: roomFromUrl()?.host ?? hostForDid(roomDid) ?? SAMPLE_HOST,
+      membership: out.membership, authority: out.authority,
+    });
+
+    const rungs = await fetchChain().catch(() => 0);
+    if (rungs) {
+      mine.push(`epoch key chain fetched — ${rungs} rung(s), so the room's history opens`);
+      S.set(key("room:" + roomDid), {
+        ...S.get(key("room:" + roomDid)), snapshot: member.snapshot(),
+      });
+    }
+
+    $("steps").innerHTML =
+        `<li class="who">the owner, over ${carrier === "tsp" ? "TSP" : "DIDComm"}</li>` + out.steps.map(s => `<li>${s}</li>`).join("")
+      + `<li class="who">this browser</li>` + mine.map(s => `<li>${s}</li>`).join("");
+    $("join-panel").classList.remove("hide");
+    showEpochs();
+    await loadRecords();
+    await loadRooms();
+    log("");
+  } catch (e) {
+    log("could not join: " + (e.message ?? e), true);
+    console.error("[join] failed", e);
+    if (/timed out/i.test(String(e.message ?? e))) {
+      log("no reply arrived. The request may have been rejected at the mediator, which the "
+        + "owner never sees. If your mediator speaks a different TSP revision, retry over "
+        + "DIDComm by adding ?carrier=didcomm to this page's URL.", true);
+    }
+  }
+}
+
+async function openRoom(roomDid) {
+  const held = S.get(key("room:" + roomDid));
+  member = RoomMember.restore(held.snapshot);
+  currentRoomDid = roomDid;
+
+  const applied = await catchUp(held);
+  // Rungs minted while this member was away arrive the same way the commits did.
+  const rungs = await fetchChain().catch(() => 0);
+  if (applied || rungs) {
+    S.set(key("room:" + roomDid), {
+      ...S.get(key("room:" + roomDid)), snapshot: member.snapshot(),
+    });
+  }
+  $("steps").innerHTML = "<li>restored from this browser — no key left it</li>"
+    + (applied
+        ? `<li>applied ${applied} commit(s) — somebody joined while you were away</li>`
+        : "")
+    + (rungs ? `<li>epoch key chain: ${rungs} rung(s)</li>` : "");
+  $("join-panel").classList.remove("hide");
+  showEpochs();
+  await loadRecords();
+}
+
+/// Fetch the room's epoch key chain and hand it to this member.
+///
+/// **This is what makes a room's history readable.** Records are sealed under the epoch
+/// current when they were written, and a member joining at epoch 5 holds only epoch 5's
+/// key — so without this they can read what happens next and nothing that came before.
+/// Each rung seals one epoch's key under its successor's, and a holder of the current key
+/// walks *backwards* down them.
+///
+/// Backwards only, and that is the property rather than a limitation: a rung lets you go
+/// down from a key you hold, never up to one you do not, which is what keeps a removal
+/// forward-only. Somebody removed at epoch 7 cannot climb to 8.
+///
+/// Asked of the **host**, which stores the rungs as ciphertext it cannot read — the key
+/// that opens one is the storage key of the epoch it names, and no host ever holds that.
+/// What a host learns from a rung is that an epoch happened, which it knew already.
+async function fetchChain() {
+  const { links } = await hostTask(
+    "https://trusttasks.org/spec/rooms/epoch/chain/0.1", "read", {});
+  if (!links?.length) return 0;
+  member.addLinks(JSON.stringify(links));
+  return links.length;
+}
+
+/// Apply every commit made since this member last looked.
+///
+/// **Not optional, and done before anything is read.** Every membership change is a commit
+/// and every commit advances the epoch; a member who misses one is stuck at their last
+/// epoch and can open nothing sealed after it. The symptom is "this record does not open" —
+/// which reads as corruption rather than as a message that never arrived, and is why this
+/// runs on open rather than waiting for somebody to press something.
+///
+/// A pull, because a tab has no inbox. In the real design the commit is pushed to a
+/// member's agent over DIDComm; the same inversion the invitation forced applies here.
+async function catchUp(held) {
+  // Commits come from the room's OWNER, not its host — a host stores ciphertext and has no
+  // opinion about who is in a room, so it has none to give. Asked over the same mediator the
+  // owner was reached at to be admitted, which is what makes this work for a room that was
+  // addressed rather than listed. It used to route on this sample's own slug, so a room you
+  // were handed a link to could never catch up: you would join, fall behind at the next
+  // admission, and find records refusing to open with nothing to say why.
+  const { link, carrier } = await connect(held.roomDid);
+  const commits = await requestCommits(link, carrier, held.roomDid, identity, member.epoch);
+  if (!commits.length) return 0;
+
+  for (const c of commits) {
+    // Each returns the epoch rung it produced. Applied in order — a commit is only
+    // meaningful against the epoch immediately before it.
+    member.applyCommit(b64u.dec(c.commit));
+  }
+  S.set(key("room:" + held.roomDid), { ...held, snapshot: member.snapshot() });
+  return commits.length;
+}
+
+function showEpochs() {
+  const held = S.get(key("room:" + currentRoomDid)) ?? {};
+  $("room-link").textContent =
+    `${location.origin}/#/room/${encodeURIComponent(currentRoomDid)}`
+    + (held.host ? `?at=${encodeURIComponent(held.host)}` : "");
+  $("epoch").firstChild.textContent = member.epoch;
+  $("earliest").firstChild.textContent = member.earliestReadableEpoch();
+}
+
+// ── records ────────────────────────────────────────────────────────────────
+//
+// These go to the room's HOST, not to the sample room's own API — a real
+// `POST /trust-tasks`, and the same one a VTC serves. Two things travel with every
+// request and the host takes nothing else from it:
+//
+//   - the **presenter**, from the document's own `eddsa-jcs-2022` proof. Never from a
+//     payload field: a presentation says what may be done, not who is doing it, so an
+//     unbound one is a bearer token anyone observing it inherits.
+//   - the **chain**, minted here per request and narrowed to exactly one action.
+//
+// Both are produced in wasm, by the key this page never sees.
+
+/// Where the sample room's host is. A *default*, not a constant: a room carries its own
+/// host, and this is only what the catalogue's rooms happen to use.
+/// Where to look for a room's host when nobody has said.
+///
+/// Nobody usually has to: a listed room carries its host in the catalogue, and an addressed
+/// one carries it in `?at=`. This is only the gap between them.
+///
+/// **Only on loopback.** A hardcoded `http://127.0.0.1:8300` used to be the fallback
+/// everywhere, which is wrong the moment this page is served over TLS: the browser blocks a
+/// plaintext request from an https origin as mixed content, and the error names the content
+/// policy rather than the missing address. Off loopback there is no sensible guess, so the
+/// site says what it needs instead of guessing wrongly.
+const SAMPLE_HOST =
+  location.hostname === "127.0.0.1" || location.hostname === "localhost"
+    ? "http://127.0.0.1:8300"
+    : null;
+
+/// A room is addressed, never configured.
+///
+/// `#/room/<roomDid>?at=<host url>` — paste one of those and this site works against a room
+/// it has never seen, on a host it does not know, provided you hold credentials for it.
+/// That is the whole of "one site, any number of rooms", and it is why nothing below reads
+/// a room out of a constant.
+///
+/// The **records** half genuinely works this way, because a host needs nothing but the
+/// request: a signed document and a chain the room issued. **Admission** does not, and
+/// cannot yet — it needs the room's owner, who is reachable over DIDComm at the mediator
+/// the room advertises, and a `did:key` room advertises nothing. Named here rather than
+/// hidden, because the difference is the honest boundary of what this demonstrates.
+function roomFromUrl() {
+  const m = location.hash.match(/^#\/room\/([^?]+)(?:\?(.*))?$/);
+  if (!m) return null;
+  const params = new URLSearchParams(m[2] ?? "");
+  return { roomDid: decodeURIComponent(m[1]), host: params.get("at") ?? SAMPLE_HOST ?? null };
+}
+
+/// Send one Trust Task to the host, signed, carrying a presentation for `action`.
+async function hostTask(type, action, payload) {
+  const held = S.get(key("room:" + currentRoomDid));
+
+  // Minting the presentation can fail, and when it does the request is never made.
+  // `attenuate` refuses to widen, so asking for an action the room did not grant fails
+  // HERE — in your own key holder — rather than at the host. That is worth distinguishing
+  // on screen: "you were never given this" and "the host disagreed" are different
+  // sentences, and only the first can be answered by asking the owner.
+  let presentation;
+  try {
+    presentation = JSON.parse(identity.present(
+      JSON.stringify(held.authority),
+      JSON.stringify(held.membership),
+      action,
+      null,          // no challenge: this host issues none. A nonce is the verifier's.
+    ));
+  } catch (e) {
+    const err = new Error(e.message ?? String(e));
+    err.refusedLocally = true;
+    throw err;
+  }
+
+  const document = {
+    id: `urn:uuid:${crypto.randomUUID()}`,
+    type,
+    issuedAt: new Date().toISOString().replace(/\.\d+Z$/, "Z"),
+    payload: { roomId: currentRoomDid, presentation, ...payload },
+  };
+  const signed = identity.signDocument(JSON.stringify(document));
+
+  // **The same bytes, whichever way they travel.** A host takes the presenter from this
+  // document's own proof and the authority from the chain inside it, so a request is exactly
+  // as authorized over a socket as over a POST — the carrier authenticates its sender and
+  // that confers nothing. Which is why this is one signature and two ways to post it, rather
+  // than two request paths.
+  const where = held.host ?? SAMPLE_HOST;
+  if (!where) {
+    throw new Error(
+      "nothing has said where this room's records live — a room's identifier deliberately "
+        + "does not name a host, so the catalogue or the link has to. Add `?at=<host did or "
+        + "url>` to the address.",
+    );
+  }
+  const answer = where.startsWith("did:")
+    ? await hostOverMediator(where, JSON.parse(signed))
+    : await hostOverHttp(where, signed);
+
+  // The answer is the document, and it says for itself whether it is one. `trust-task-error`
+  // is the framework's own marker; over HTTP the status says the same thing a second time,
+  // and over a socket there is no status to say it — so the document is what both read.
+  if (String(answer.type ?? "").includes("trust-task-error")) {
+    const p = answer.payload ?? {};
+    // A host's refusal is its ANSWER, not a broken network — shown in the host's own words.
+    throw new Error(p.reason ?? p.message ?? p.code ?? JSON.stringify(answer));
+  }
+  return answer.payload;
+}
+
+/// Post a signed Trust Task to a host at a URL.
+async function hostOverHttp(host, signed) {
+  const res = await fetch(`${host}/trust-tasks`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: signed,
+  });
+  const body = await res.json().catch(() => null);
+  if (!body) throw new Error(`the host at ${host} answered with nothing readable`);
+  return body;
+}
+
+/// Send a signed Trust Task to a host reachable only at a mediator.
+///
+/// **What this buys is reach, not authority.** A URL address needs the host to be somewhere a
+/// member's browser is allowed to open — a public name, a certificate, an origin on its
+/// allow-list. A DID address needs none of that: both sides dial a mediator and neither has
+/// to be reachable by the other. A host behind NAT, on a laptop, or on an origin no browser
+/// would be permitted to call is reached exactly like a phone is.
+///
+/// A Trust Task already has a binding for each carrier, so nothing is invented here: the
+/// DIDComm one wraps the document under a single reserved envelope type, and the TSP one is
+/// the document itself, byte-identical to the body that would have been POSTed.
+async function hostOverMediator(hostDid, document) {
+  const { link, carrier } = await connect(hostDid);
+  return await link.askTrustTask(hostDid, carrier, document);
+}
+
+/// List, then fetch each record./// List, then fetch each record.
+///
+/// Two calls because they are two questions. `list` answers "what is in this room" and
+/// returns **metadata only, never bodies** — a host that returned content on a list would
+/// be handing out every record to anyone entitled to see that records exist. `get` answers
+/// "give me this one", and only then does ciphertext move.
+async function loadRecords() {
+  let recs;
+  try {
+    const listed = (await hostTask(
+      "https://trusttasks.org/spec/rooms/records/list/0.1", "read", {})).records ?? [];
+    recs = [];
+    for (const meta of listed) {
+      const got = await hostTask(
+        "https://trusttasks.org/spec/rooms/records/get/0.1", "read", { key: meta.key });
+      // `sealed` is a `SealedContent` — ciphertext, nonce and epoch together — which is what
+      // the schema always specified and what a host now sends.
+      //
+      // This used to reassemble it from flat members, because that is what hosts actually
+      // sent: a read was answered by serialising the *storage* record, where `sealed` is a
+      // bare base64 string. VTI #1368 gave the task a response type, and the workaround
+      // became the bug. Worth remembering as the general case: code written against a defect
+      // breaks when the defect is fixed, and it breaks quietly — here, as a record that
+      // stores and lists but will not open.
+      recs.push({ ...meta, ...got });
+    }
+  } catch (e) { log("the host refused the read: " + e.message); return; }
+  $("records-panel").classList.remove("hide");
+  const box = $("records");
+  box.innerHTML = "";
+  if (!recs.length) { box.innerHTML = `<p style="color:var(--muted)">Nothing written yet.</p>`; return; }
+  for (const r of recs) {
+    const el = document.createElement("div");
+    el.className = "card";
+    el.style.marginBottom = ".6rem";
+    // A retracted record is a TOMBSTONE: the body is gone, the key and version stay, so
+    // the room's history still shows that something was here and is not any more. There is
+    // nothing to open, and trying reports a missing `ciphertext` — which reads as
+    // corruption rather than as the record having been withdrawn on purpose.
+    const retracted = r.status && r.status !== "active";
+
+    let plaintext = null;
+    let why = null;
+    if (!retracted) {
+      try {
+        plaintext = new TextDecoder().decode(
+          member.openRecord(r.key, BigInt(r.version), JSON.stringify(r.sealed)));
+      } catch (e) {
+        why = String(e.message ?? e);
+      }
+    }
+    el.innerHTML = `<div class="row" style="justify-content:space-between">
+        <strong>${r.key}</strong>
+        <span style="color:var(--muted);font-size:12px">v${r.version} · epoch ${r.sealed.epoch}</span>
+      </div>
+      <p style="margin:.5rem 0">${
+        retracted
+          ? `<em style="color:var(--seal)">${r.status} — the body is gone; the key and
+             version stay, so the room still shows something was here</em>`
+          : plaintext !== null
+            ? plaintext.replace(/[<>&]/g, c => ({"<":"&lt;",">":"&gt;","&":"&amp;"}[c]))
+            : `<em style="color:var(--seal)">did not open — ${why}</em>`
+      }</p>
+      ${retracted ? "" : `<details><summary style="cursor:pointer;color:var(--muted);font-size:13px">what the host has</summary>
+        <div class="cipher mono">${r.sealed.ciphertext}</div></details>`}`;
+    if (!retracted) {
+    const retract = document.createElement("button");
+    retract.className = "ghost";
+    retract.style.marginTop = ".6rem";
+    retract.textContent = "Retract";
+    retract.onclick = () => curate(r.key);
+    el.append(retract);
+    }
+    box.append(el);
+  }
+}
+
+/// Retract a record — which needs `curate`, an action `write` does not imply.
+///
+/// The Library grants `read` and `write`; the Workshop also grants `curate`. Same button in
+/// both, and in the Library it never reaches the network: `attenuate` refuses to widen what
+/// the room gave you, so your own key holder declines to mint a presentation for an action
+/// you were not granted.
+async function curate(key) {
+  try {
+    await hostTask("https://trusttasks.org/spec/rooms/records/curate/0.1", "curate", {
+      key, status: "retracted", reason: "retracted from the demo",
+    });
+  } catch (e) {
+    log(e.refusedLocally
+      ? `refused here, and never sent: ${e.message} — ask the room's owner for it, `
+        + `there is nothing the host could have done`
+      : `the host refused: ${e.message}`);
+    return;
+  }
+  log("");
+  await loadRecords();
+}
+
+async function write() {
+  const key = $("rec-key").value.trim();
+  const body = $("rec-body").value;
+  if (!key) { log("a record needs a key"); return; }
+
+  // **Ask what version this will be, then seal against the answer.**
+  //
+  // Versions are monotonic **per room**, not per record — the host allocates the room's
+  // `next_version` to whatever is written next, whichever key it is under. So the second
+  // record in a room is version 2 even though it is that key's first.
+  //
+  // This mattered because the version is bound *into* the ciphertext along with the room,
+  // the key and the epoch. Sealing against a guess stores fine and never opens, and the
+  // symptom is a record that lists correctly and then refuses — which reads as corruption
+  // rather than as a number that was wrong before it was written. This used to pass `1`,
+  // and so the first record in any room worked and every one after it did not.
+  //
+  // Derived from the listing rather than from a counter this page keeps, because the page's
+  // count is only its own writes and any other member's would be missing from it.
+  let nextVersion;
+  try {
+    const listed = (await hostTask(
+      "https://trusttasks.org/spec/rooms/records/list/0.1", "read", {})).records ?? [];
+    nextVersion = listed.reduce((m, r) => Math.max(m, Number(r.version ?? 0)), 0) + 1;
+  } catch (e) { log("could not read the room before writing: " + e.message); return; }
+
+  // There is a race here and it is worth naming: two members sealing against the same
+  // answer both get it, and the second one's record stores and never opens. `expectedVersion`
+  // guards the *key*, not the room's counter, so nothing catches it. A real client re-reads
+  // and re-seals on conflict; a two-person demo says so instead.
+  const sealed = JSON.parse(
+    member.sealRecord(key, BigInt(nextVersion), new TextEncoder().encode(body)));
+
+  try {
+    // `write`, not `read`. The presentation is narrowed to exactly this action, and a
+    // member holding only `read` is refused by their own `attenuate` before the host
+    // ever sees it.
+    // `expectedVersion: 0` is create-only — "this key does not exist yet" — and is about
+    // the key, where the number sealed above is about the room. Two different questions that
+    // both happen to be spelled as a version.
+    await hostTask("https://trusttasks.org/spec/rooms/records/put/0.1", "write", {
+      key, sealed, expectedVersion: 0,
+    });
+  } catch (e) { log("the host refused the write: " + e.message); return; }
+
+  $("rec-key").value = ""; $("rec-body").value = "";
+  log("");
+  // After the log is cleared, not before: `loadRecords` reports its own failures there,
+  // and clearing afterwards swallowed them — which is how a working write looked like a
+  // silently empty room.
+  await loadRecords();
+}
+
+for (const name of WHO) {
+  const b = $("who-" + name);
+  b.onclick = async () => {
+    who = name;
+    S.set("dr:who", who);
+    // The socket is authenticated as one transport DID, and a different member is a
+    // different party. Dropped rather than reused, so nobody inherits somebody else's link.
+    closeLinks();
+    transport = null;
+    load();
+    renderIdentity();
+    // Panels belong to the identity that opened them.
+    $("join-panel").classList.add("hide");
+    $("records-panel").classList.add("hide");
+    log("");
+    if (me) await loadRooms();
+  };
+}
+
+$("mint").onclick = mint;
+$("forget").onclick = () => {
+  if (!confirm(`This destroys ${who}'s key and every room it joined. There is no recovery.`)) return;
+  for (const k of Object.keys(localStorage)) if (k.startsWith(`dr:${who}:`)) S.del(k);
+  me = null; member = null; identity = null;
+  $("join-panel").classList.add("hide"); $("records-panel").classList.add("hide");
+  renderIdentity();
+};
+$("write").onclick = write;
+$("join-by-did").onclick = () => joinByDid($("by-did").value);
+$("by-did").onkeydown = (e) => { if (e.key === "Enter") joinByDid($("by-did").value); };
+
+renderIdentity();
+if (me) await loadRooms();
+
+// A link is an address. Handle it on arrival and whenever it changes, so pasting one into
+// the bar does what pressing a card does.
+addEventListener("hashchange", () => { openAddressedRoom(); });
+await openAddressedRoom();
+</script>
