@@ -62,6 +62,8 @@ ed25519-dalek = "3"
 multibase = "0.9"
 getrandom = "0.4"
 chrono = "0.4"
+# The access password hash (`--access-hash`). Already in the tree through the TDK.
+sha2 = "0.10"
 
 [dev-dependencies]
 # The rooms-file tests write one and read it back, so they exercise the parse rather than a

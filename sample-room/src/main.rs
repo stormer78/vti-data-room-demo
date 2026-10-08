@@ -45,6 +45,7 @@
 //! and authorises nothing, which is why it says so on screen. The record path is real; the
 //! authority path is the next slice.
 
+mod access;
 mod admission;
 mod mediator;
 mod owner;
@@ -300,8 +301,63 @@ async fn register_with_host(
     Ok(())
 }
 
+/// The command line, which is only the access password: `--access-hash <sha256-hex>` (or
+/// `ACCESS_HASH`) puts the site behind it, and `--hash-password` reads a password from stdin
+/// and prints the hash to pass. Everything else is configured through the environment.
+fn access_gate() -> Result<Option<access::Gate>, String> {
+    let mut hash = std::env::var("ACCESS_HASH").ok().filter(|h| !h.is_empty());
+    let mut args = std::env::args().skip(1);
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--access-hash" => {
+                hash = Some(args.next().ok_or("--access-hash needs a value")?);
+            }
+            a if a.starts_with("--access-hash=") => {
+                hash = Some(a["--access-hash=".len()..].to_string());
+            }
+            "--hash-password" => {
+                let mut line = String::new();
+                if std::io::IsTerminal::is_terminal(&std::io::stdin()) {
+                    eprint!("password: ");
+                }
+                std::io::stdin()
+                    .read_line(&mut line)
+                    .map_err(|e| format!("read the password: {e}"))?;
+                let password = line.trim_end_matches(['\r', '\n']);
+                if password.is_empty() {
+                    return Err("no password given".into());
+                }
+                println!("{}", access::hash_password(password));
+                std::process::exit(0);
+            }
+            other => {
+                return Err(format!(
+                    "unknown argument {other:?}\n\
+                     usage: dataroom-sample-room [--access-hash <sha256-hex>] | --hash-password"
+                ));
+            }
+        }
+    }
+    match hash {
+        Some(h) => {
+            let gate = access::Gate::from_hex(&h)?;
+            println!("site is password protected (--access-hash)");
+            Ok(Some(gate))
+        }
+        None => Ok(None),
+    }
+}
+
 #[tokio::main]
 async fn main() {
+    let gate = match access_gate() {
+        Ok(gate) => gate,
+        Err(e) => {
+            eprintln!("{e}");
+            std::process::exit(2);
+        }
+    };
+
     // First, before anything is minted or connected. A bad rooms file is a startup failure,
     // and it should read like one — not arrive after a page of output describing work that
     // is about to be thrown away.
@@ -442,6 +498,11 @@ async fn main() {
             axum::http::HeaderValue::from_static("no-store"),
         ))
         .with_state(rooms);
+    // Outermost, so nothing — page, modules or catalogue — is served before the password.
+    let app = match gate {
+        Some(gate) => app.layer(axum::middleware::from_fn_with_state(gate, access::guard)),
+        None => app,
+    };
 
     // Loopback by default, because a demo minting keys should not appear on a network by
     // accident. Behind a load balancer set `LISTEN=0.0.0.0:8787` — a process bound to
