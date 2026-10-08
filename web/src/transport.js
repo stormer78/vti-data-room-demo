@@ -36,5 +36,10 @@ export { didPeer, multibase } from "@openvtc/vti-didcomm-js";
 // TSP — the higher-preference of the two carriers, and the one the mediator sniffs off the
 // same socket. `packRouted` is what carries a sealed message through a mediator that cannot
 // read it.
-export { pack as tspPack, packRouted as tspPackRouted, unpack as tspUnpack } from "@openvtc/vti-tsp-js";
+export {
+  pack as tspPack,
+  packInvite as tspPackInvite,
+  packRouted as tspPackRouted,
+  unpack as tspUnpack,
+} from "@openvtc/vti-tsp-js";
 export { ed25519, x25519 } from "@noble/curves/ed25519.js";

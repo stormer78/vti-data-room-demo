@@ -435,6 +435,12 @@ async fn main() {
         .route("/api/rooms", get(catalogue))
         .layer(tower_http::cors::CorsLayer::permissive())
         .fallback_service(tower_http::services::ServeDir::new(&web))
+        // A demo whose page and modules change between runs must not be served from the
+        // browser's heuristic cache: a stale carrier.js looks exactly like a protocol fault.
+        .layer(tower_http::set_header::SetResponseHeaderLayer::overriding(
+            axum::http::header::CACHE_CONTROL,
+            axum::http::HeaderValue::from_static("no-store"),
+        ))
         .with_state(rooms);
 
     // Loopback by default, because a demo minting keys should not appear on a network by

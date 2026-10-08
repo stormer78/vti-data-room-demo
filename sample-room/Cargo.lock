@@ -83,6 +83,7 @@ dependencies = [
  "getrandom 0.2.17",
  "hmac 0.13.0",
  "k256 0.14.0",
+ "ml-dsa",
  "multibase",
  "p256 0.14.0",
  "p384 0.14.0",
@@ -100,9 +101,9 @@ dependencies = [
 
 [[package]]
 name = "affinidi-data-integrity"
-version = "0.7.11"
+version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b8fb570864d6902ae4eab7e9fa440b7fd510950819058f8592a01cafc02276a5"
+checksum = "ad2d289fc4df366539b3a6eba73c9eb37abb4d5342fa6773105af3ae895bfaba"
 dependencies = [
  "affinidi-crypto",
  "affinidi-did-common",
@@ -123,14 +124,15 @@ dependencies = [
 
 [[package]]
 name = "affinidi-did-authentication"
-version = "0.3.12"
+version = "0.3.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9fd06555e5116cca844aa1d2f2e42cc75bd3bbf85069b49e3f466c8ba245e317"
+checksum = "bf4dcaf32d635dffb68d3e6fad142ef6b305ca47f6f410517ecd6d1a8feffca6"
 dependencies = [
  "affinidi-crypto",
  "affinidi-did-common",
  "affinidi-did-resolver-cache-sdk",
  "affinidi-encoding",
+ "affinidi-messaging-core",
  "affinidi-messaging-didcomm",
  "affinidi-secrets-resolver",
  "base64 0.23.1",
@@ -163,9 +165,9 @@ dependencies = [
 
 [[package]]
 name = "affinidi-did-resolver-cache-sdk"
-version = "0.8.36"
+version = "0.8.41"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "15d261ce9e5886c890492a1ed7ae6f0b286f8c8c2c711af96eb1bdf1eee9efa6"
+checksum = "094243a0e7eb63c15982da638e1bc5fed91493d42cd20d325391a0ff9a883e46"
 dependencies = [
  "affinidi-did-common",
  "affinidi-did-resolver-traits",
@@ -196,9 +198,9 @@ dependencies = [
 
 [[package]]
 name = "affinidi-did-resolver-traits"
-version = "0.1.3"
+version = "0.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "923fc32fdf5fea0925fd29b81a427bc6d6550063ae2de692d1fa0dd1cb57efed"
+checksum = "013bb943140947d949203203632766517b5442537db0d61be8f7ba1e702387cd"
 dependencies = [
  "affinidi-did-common",
  "thiserror",
@@ -234,9 +236,9 @@ dependencies = [
 
 [[package]]
 name = "affinidi-meeting-place"
-version = "0.4.5"
+version = "0.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "891fc1a20c99c50e5b2296d9bfa2b540d32587690073ae588d3345e02d7a6063"
+checksum = "9f35b9bf37689328f0c62dbf354e3a12853d1eec5008f56b6fdd6f5753c1ea3e"
 dependencies = [
  "affinidi-did-authentication",
  "affinidi-did-common",
@@ -255,13 +257,15 @@ dependencies = [
 
 [[package]]
 name = "affinidi-messaging-core"
-version = "0.1.6"
+version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3502004e98ecb8e86a26c1570a495c29945c3af8b0357c2047f084bbc91db8d0"
+checksum = "38543d1988321594efcaf14e57c00cea20295df68b0231957c25c4f80c5606ce"
 dependencies = [
  "async-trait",
  "futures-util",
+ "httpdate",
  "serde",
+ "serde_json",
  "thiserror",
  "tokio",
  "url",
@@ -269,9 +273,9 @@ dependencies = [
 
 [[package]]
 name = "affinidi-messaging-delivery"
-version = "0.1.14"
+version = "0.1.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7e5655cfc5cdac34b52b8de49e0297af3bd347b9989707053be8711fdd4c54f9"
+checksum = "175b6ced33c52369349d5d48aa2daa1f463292bc2f2490a1cee4d2c2e1a76e99"
 dependencies = [
  "affinidi-messaging-core",
  "async-trait",
@@ -285,9 +289,9 @@ dependencies = [
 
 [[package]]
 name = "affinidi-messaging-didcomm"
-version = "0.15.8"
+version = "0.15.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7e50820cf32736246a5e918a5eb1773c31ffcec898ad2ab5b26477cf7a547fa5"
+checksum = "2d47aee71138420262e5cb189b07818b229dd69515a452ab4458c4c33d6d1934"
 dependencies = [
  "affinidi-crypto",
  "base64ct",
@@ -295,10 +299,9 @@ dependencies = [
  "k256 0.14.0",
  "p256 0.14.0",
  "rand 0.10.2",
- "rand_core 0.6.4",
  "serde",
  "serde_json",
- "sha2 0.10.9",
+ "sha2 0.11.0",
  "thiserror",
  "url",
  "uuid",
@@ -306,9 +309,9 @@ dependencies = [
 
 [[package]]
 name = "affinidi-messaging-mediator-common"
-version = "0.15.44"
+version = "0.17.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f7a8d75667f60abd3a3cf57cada307744333187032cee74235daeff93f8471a0"
+checksum = "6664dbeab98d9853922882d931ad377da9e3be76641923ba530be81a3cb24cc2"
 dependencies = [
  "regex",
  "serde",
@@ -318,9 +321,9 @@ dependencies = [
 
 [[package]]
 name = "affinidi-messaging-sdk"
-version = "0.22.0"
+version = "0.33.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b579af2fee18048f092391f3c73e1b6a7be44fed38ed2bf79e03b58b9cafc84b"
+checksum = "797fd0cf52ba67766f1f30424b581c08e466ac2c946af343cd0a79f600b2533d"
 dependencies = [
  "affinidi-crypto",
  "affinidi-did-authentication",
@@ -337,9 +340,10 @@ dependencies = [
  "ahash",
  "async-trait",
  "base64 0.23.1",
+ "chrono",
  "futures-util",
+ "hyper",
  "rand 0.10.2",
- "regex",
  "reqwest",
  "rustls",
  "serde",
@@ -349,8 +353,22 @@ dependencies = [
  "tokio",
  "tokio-tungstenite",
  "tracing",
+ "trust-tasks-proof",
  "trust-tasks-rs",
  "uuid",
+]
+
+[[package]]
+name = "affinidi-net-guard"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7e524260bbe8f8e6d0d5439cd4a10ed65af1cf64756e2a751f187da4e822a473"
+dependencies = [
+ "reqwest",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "url",
 ]
 
 [[package]]
@@ -413,9 +431,9 @@ dependencies = [
 
 [[package]]
 name = "affinidi-secrets-resolver"
-version = "0.5.11"
+version = "0.5.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ff9c7363b25897b1b7080caab1ab36f95a833d84aca905b5b6d6e3a3a2b384bb"
+checksum = "3377f6a54baa889f256b1a15c822e627dff37c87d996f4797fbf5962a0befd05"
 dependencies = [
  "affinidi-crypto",
  "affinidi-encoding",
@@ -423,6 +441,7 @@ dependencies = [
  "base58",
  "base64 0.23.1",
  "getrandom 0.3.4",
+ "getrandom 0.4.3",
  "multibase",
  "rand 0.10.2",
  "serde",
@@ -452,9 +471,9 @@ dependencies = [
 
 [[package]]
 name = "affinidi-tdk"
-version = "0.12.0"
+version = "0.23.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "796229a5640d2c8e1ae81242ff86a1147994210542e3d1cdd59ec1df12bce3ea"
+checksum = "5fa40094018fcab2748b8cce522cfc45f52001b897b5397679795c6d0d94e51d"
 dependencies = [
  "affinidi-crypto",
  "affinidi-data-integrity",
@@ -477,14 +496,15 @@ dependencies = [
 
 [[package]]
 name = "affinidi-tdk-common"
-version = "0.6.10"
+version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "864083bc98bc29e8ed049b8c477532f9f435a6befe75edb9cac2d9cf257842ec"
+checksum = "a50dbb0410da8724cd212bba96da604140e3ede9d5f2d5961d7b622886e885ec"
 dependencies = [
  "affinidi-data-integrity",
  "affinidi-did-authentication",
  "affinidi-did-common",
  "affinidi-did-resolver-cache-sdk",
+ "affinidi-net-guard",
  "affinidi-secrets-resolver",
  "ahash",
  "apple-native-keyring-store",
@@ -505,9 +525,9 @@ dependencies = [
 
 [[package]]
 name = "affinidi-tsp"
-version = "0.1.16"
+version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0987c24a0fd0ea62705f94a3a7886566e3a0fe281212a632415db32408d1ae77"
+checksum = "807e7ede5bffeb559889dff3bd1b0e6c2a3bb0b4833626d928febcc710018340"
 dependencies = [
  "affinidi-cesr",
  "affinidi-did-common",
@@ -515,11 +535,12 @@ dependencies = [
  "affinidi-encoding",
  "blake2",
  "chacha20poly1305 0.11.0",
+ "crypto_secretbox",
  "ed25519-dalek 3.0.0",
  "hex",
  "hkdf 0.13.0",
  "rand 0.10.2",
- "rand_core 0.6.4",
+ "salsa20 0.11.0",
  "serde",
  "serde_json",
  "sha2 0.11.0",
@@ -1376,6 +1397,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "crypto_secretbox"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b9d6cf87adf719ddf43a805e92c6870a531aedda35ff640442cbaf8674e141e1"
+dependencies = [
+ "aead 0.5.2",
+ "cipher 0.4.4",
+ "generic-array",
+ "poly1305 0.8.0",
+ "salsa20 0.10.2",
+ "subtle",
+ "zeroize",
+]
+
+[[package]]
 name = "ctr"
 version = "0.9.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1644,9 +1680,9 @@ dependencies = [
 
 [[package]]
 name = "did-scid"
-version = "0.2.6"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "73c7754d192a630118d5fa3353f1cce5c291187762b0e493f397d3e0328b407d"
+checksum = "9a5831431ec1890277e48a90ce25e5093644ca6f5390e715357c1d948110a6f3"
 dependencies = [
  "affinidi-did-common",
  "didwebvh-rs",
@@ -1658,9 +1694,9 @@ dependencies = [
 
 [[package]]
 name = "didwebvh-rs"
-version = "0.6.1"
+version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "87a6d8803724264019c1b1dda174b4f666b833e9ac05acd45e87e9fecef2c67b"
+checksum = "f02bdbaaffc5b0bec1e3f8049e5e415476cfd56d23bc6bf692419e674ded93f9"
 dependencies = [
  "affinidi-data-integrity",
  "affinidi-did-common",
@@ -1720,9 +1756,9 @@ dependencies = [
 
 [[package]]
 name = "dtg-credentials"
-version = "0.9.1"
+version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fa51b03528a22ad07cd0f812a99fae834b7867c205943a40ad90bb8eb62edb08"
+checksum = "1b1630b5524260c34fd1aff91ef886d5518fbb98f712efc23a909044bf5b740e"
 dependencies = [
  "affinidi-data-integrity",
  "affinidi-secrets-resolver",
@@ -1734,6 +1770,7 @@ dependencies = [
  "sha2 0.11.0",
  "thiserror",
  "tracing",
+ "unicode-normalization",
 ]
 
 [[package]]
@@ -3437,6 +3474,7 @@ dependencies = [
  "pkcs8 0.11.0",
  "shake",
  "signature 3.0.0",
+ "zeroize",
 ]
 
 [[package]]
@@ -3461,6 +3499,7 @@ dependencies = [
  "ctutils",
  "hybrid-array",
  "num-traits",
+ "zeroize",
 ]
 
 [[package]]
@@ -3650,6 +3689,7 @@ version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b6b08d90fc020cb5354d5f08ca17711b84c82e2bcc7331753fd94f000d99a8c8"
 dependencies = [
+ "getrandom 0.4.3",
  "log",
  "openmls_serialization_helpers",
  "openmls_traits",
@@ -3658,6 +3698,7 @@ dependencies = [
  "serde_bytes",
  "thiserror",
  "tls_codec",
+ "web-time",
  "zeroize",
 ]
 
@@ -4521,6 +4562,25 @@ name = "ryu-js"
 version = "1.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "04d056b875a9d2e6cb9a61d127afee9ac5999b9f87bcb32079d1318e505be714"
+
+[[package]]
+name = "salsa20"
+version = "0.10.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "97a22f5af31f73a954c10289c93e8a50cc23d971e80ee446f1f6f7137a088213"
+dependencies = [
+ "cipher 0.4.4",
+]
+
+[[package]]
+name = "salsa20"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2f874456e72520ff1375a06c588eaf074b0f01f9e9e1aada45bd9b7954a6e42c"
+dependencies = [
+ "cfg-if",
+ "cipher 0.5.2",
+]
 
 [[package]]
 name = "same-file"
@@ -5416,9 +5476,9 @@ dependencies = [
 
 [[package]]
 name = "trust-tasks-capability-client"
-version = "0.18.11"
+version = "0.27.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "df30d9c2a63dc5147b9fee773cc8ccce201b45ffd6a3a4724dd4a8e02dfdbbd2"
+checksum = "48b1cd89294f65db2811bce969df8a7d3319a4a311a856cc93b489ea579ab848"
 dependencies = [
  "chrono",
  "serde",
@@ -5429,10 +5489,28 @@ dependencies = [
 ]
 
 [[package]]
-name = "trust-tasks-rs"
-version = "0.18.11"
+name = "trust-tasks-proof"
+version = "0.27.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e3b18725200227aa173e4c7b6b89450bf6d42ab4add65caf510464378f196356"
+checksum = "398382ce32ef4ebe9cd349c0f0ece9b312124e95506981702ef51de3a2fcdfd0"
+dependencies = [
+ "affinidi-crypto",
+ "affinidi-data-integrity",
+ "affinidi-did-common",
+ "affinidi-did-resolver-cache-sdk",
+ "affinidi-encoding",
+ "async-trait",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "trust-tasks-rs",
+]
+
+[[package]]
+name = "trust-tasks-rs"
+version = "0.27.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "65c681b943ca4545d4e3ff5f4dca7cf0d8ccd9d07bc0594f76dc9b5e3dd54017"
 dependencies = [
  "async-trait",
  "chrono",
@@ -5497,6 +5575,15 @@ name = "unicode-ident"
 version = "1.0.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e6e4313cd5fcd3dad5cafa179702e2b244f760991f45397d14d4ebf38247da75"
+
+[[package]]
+name = "unicode-normalization"
+version = "0.1.25"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5fd4f6878c9cb28d874b009da9e8d183b5abc80117c40bbd187a1fde336be6e8"
+dependencies = [
+ "tinyvec",
+]
 
 [[package]]
 name = "universal-hash"
@@ -5610,29 +5697,38 @@ checksum = "5c3082ca00d5a5ef149bb8b555a72ae84c9c59f7250f013ac822ac2e49b19c64"
 
 [[package]]
 name = "vta-sdk"
-version = "0.34.1"
+version = "0.64.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2d0282804d77ca99e9911f4a8a070e94e63f2cdad57fbdcd1bb9065b9b5194d4"
+checksum = "64f766d5bf102c2cb91c423ddd826e78d6cd65ed6c21343b6ed23cafab63a585"
 dependencies = [
+ "affinidi-data-integrity",
+ "affinidi-did-common",
+ "affinidi-did-resolver-cache-sdk",
+ "affinidi-did-resolver-traits",
  "affinidi-openid4vci",
  "affinidi-openid4vp",
+ "affinidi-secrets-resolver",
+ "async-trait",
  "base64 0.23.1",
  "chrono",
  "multibase",
  "serde",
  "serde_json",
  "thiserror",
+ "tokio",
+ "trust-tasks-rs",
  "url",
 ]
 
 [[package]]
 name = "vti-common"
-version = "0.18.1"
+version = "0.40.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "979b9d6fae91f87377cc95f817260c526254acbc98dcb14d4419a3bf6bba4d87"
+checksum = "3b484092bfd2b499ade7302fb287cb8e6137ef237a4f72d13e3df72e5071c6bf"
 dependencies = [
  "affinidi-data-integrity",
  "affinidi-did-resolver-cache-sdk",
+ "affinidi-messaging-core",
  "affinidi-messaging-delivery",
  "affinidi-secrets-resolver",
  "affinidi-tdk",
@@ -5644,6 +5740,7 @@ dependencies = [
  "chrono",
  "ed25519-dalek 3.0.0",
  "fjall",
+ "futures-util",
  "hex",
  "hkdf 0.13.0",
  "hmac 0.13.0",
@@ -5651,11 +5748,15 @@ dependencies = [
  "jsonwebtoken",
  "multibase",
  "rand 0.10.2",
+ "reqwest",
  "serde",
  "serde_json",
+ "serde_json_canonicalizer",
  "sha2 0.11.0",
+ "subtle",
  "thiserror",
  "tokio",
+ "tokio-util",
  "tracing",
  "trust-tasks-capability-client",
  "trust-tasks-rs",
@@ -5666,23 +5767,28 @@ dependencies = [
 
 [[package]]
 name = "vti-rooms"
-version = "0.1.3"
+version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "675230372ce9b4b42705e76b994d4f8d43cddd7946c508f05caae093ed07600c"
+checksum = "9e16309f82e40513082e4a4d6a4fd1e6215d96d8849db2aae631be14b091813a"
 dependencies = [
  "async-trait",
  "base64 0.23.1",
- "chacha20poly1305 0.10.1",
+ "chacha20poly1305 0.11.0",
  "chrono",
+ "getrandom 0.2.17",
  "getrandom 0.4.3",
+ "multibase",
  "openmls",
  "openmls_basic_credential",
  "openmls_rust_crypto",
  "openmls_traits",
  "serde",
  "serde_json",
+ "serde_json_canonicalizer",
+ "sha2 0.11.0",
  "thiserror",
  "tls_codec",
+ "trust-tasks-rs",
  "vti-common",
 ]
 
@@ -5802,6 +5908,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5a6580f308b1fad9207618087a65c04e7a10bc77e02c8e84e9b00dd4b12fa0bb"
 dependencies = [
  "js-sys",
+ "serde",
  "wasm-bindgen",
 ]
 

@@ -69,6 +69,7 @@ const REPLY_TIMEOUT: Duration = Duration::from_secs(30);
 async fn main() -> Result<(), String> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let over_tsp = args.iter().any(|a| a == "--tsp");
+    let over_didcomm = args.iter().any(|a| a == "--didcomm");
     let host = args
         .iter()
         .position(|a| a == "--at")
@@ -83,7 +84,7 @@ async fn main() -> Result<(), String> {
         })
         .map(|(_, a)| a.clone())
         .next()
-        .ok_or("usage: join-by-did [--tsp] <room did:peer> [--at <host did>]")?;
+        .ok_or("usage: join-by-did [--tsp|--didcomm] <room did:peer> [--at <host did>]")?;
 
     // 1. Where is this room's owner, and over what? The room's own identifier says both.
     let advertised = wire::advertised_mediator(&room_did)?.ok_or_else(|| {
@@ -96,7 +97,12 @@ async fn main() -> Result<(), String> {
     // `--tsp` forces the carrier; without it, take the best one the room says it serves.
     // Asking for a carrier a room does not advertise is allowed and is said out loud — it is
     // how you find out whether an owner serves more than it admits to.
-    let carrier = if over_tsp {
+    let carrier = if over_didcomm {
+        if !advertised.didcomm {
+            eprintln!("note: this room does not advertise DIDComm — asking over it anyway");
+        }
+        "didcomm"
+    } else if over_tsp {
         if !advertised.tsp {
             eprintln!("note: this room does not advertise TSP — asking over it anyway");
         }
@@ -355,7 +361,7 @@ impl MemberKey {
         );
 
         // The `did:key` convention: the multibase tag IS the verification-method fragment.
-        let secret = affinidi_secrets_resolver::secrets::Secret::from_str(
+        let secret = affinidi_secrets_resolver::secrets::Secret::from_jwk_value(
             &format!("{did}#{}", &did["did:key:".len()..]),
             &serde_json::json!({
                 "crv": "Ed25519",
@@ -394,12 +400,14 @@ impl MemberKey {
         let now = chrono::Utc::now();
         let mut leaf = root
             .attenuate(
+                dtg_credentials::IssuerScope::Directed,
                 self.did.clone(),
                 vec![action.to_string()],
                 now,
                 // Required, and rightly: a presentation that does not expire is a standing
                 // grant, which is the one thing a presentation exists not to be.
                 now + chrono::Duration::hours(4),
+                None,
             )
             .map_err(|e| format!("cannot narrow your authority to `{action}`: {e}"))?;
         leaf.sign(&self.secret, None)
@@ -738,6 +746,29 @@ impl Client {
         Ok(answer["payload"].clone())
     }
 
+    /// Form the TSP relationship Rev 3 requires before an application message (§7.2.2).
+    ///
+    /// Without one the peer drops the message silently, which reads as an owner that never
+    /// answers. Idempotent: `SendInvite` is only valid from `None`, so a peer this client
+    /// already invited is left alone (the same check `vta-sdk`'s `relate` makes). Any
+    /// recorded state admits traffic both ways, so the request can follow the invite
+    /// immediately rather than waiting for the accept — the mediator delivers them in order.
+    async fn relate(&self, peer: &str) -> Result<(), String> {
+        let tsp = self.atm.tsp();
+        let state = tsp
+            .relationship_state(&self.profile, peer)
+            .await
+            .map_err(|e| format!("read the TSP relationship with {peer}: {e}"))?;
+        if state.admits_application_message() {
+            return Ok(());
+        }
+        tsp.form_relationship_routed(&self.profile, peer)
+            .await
+            .map_err(|e| format!("invite {peer} to a TSP relationship: {e}"))?;
+        eprintln!("tsp       invited {} to a relationship", short(peer));
+        Ok(())
+    }
+
     /// A Trust-Task document over TSP: the payload **is** the document, no wrapper.
     async fn send_tsp_document(
         &self,
@@ -745,6 +776,7 @@ impl Client {
         _id: &str,
         document: &serde_json::Value,
     ) -> Result<(), String> {
+        self.relate(to).await?;
         let bytes = serde_json::to_vec(document).map_err(|e| e.to_string())?;
         self.atm
             .tsp()
@@ -834,6 +866,7 @@ impl Client {
         msg_type: &str,
         body: serde_json::Value,
     ) -> Result<(), String> {
+        self.relate(room_did).await?;
         let envelope = serde_json::json!({ "id": id, "type": msg_type, "body": body });
         let bytes = serde_json::to_vec(&envelope).map_err(|e| e.to_string())?;
         self.atm
@@ -945,6 +978,11 @@ impl Client {
             return Ok((typ, body));
         }
     }
+}
+
+/// A DID cut short for a log line.
+fn short(did: &str) -> &str {
+    &did[..did.len().min(32)]
 }
 
 /// One string member, if it is there and is a string.

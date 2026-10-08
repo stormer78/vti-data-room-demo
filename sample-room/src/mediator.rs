@@ -48,7 +48,9 @@
 
 use std::sync::Arc;
 
-use affinidi_messaging_core::{Inbound, MessageTransport, Protocol};
+use affinidi_messaging_core::{
+    Inbound, InboundKind, MessageTransport, Protocol, RelationshipRequest,
+};
 use affinidi_messaging_sdk::DidCommTransport;
 use affinidi_secrets_resolver::SecretsResolver as _;
 use affinidi_tdk::common::TDKSharedState;
@@ -168,10 +170,62 @@ async fn dispatch(
         // The delivery layer only surfaces a sender it has authenticated — DIDComm's
         // authcrypt, or TSP's own unpack. An unauthenticated frame has nobody to answer and
         // nothing to bind a request to, which is half of what makes admission safe.
+        // Every frame that reaches this owner is reported, including the ones dropped below —
+        // a silent owner is indistinguishable from one that was never written to. `DEMO_DEBUG=1`
+        // adds the payload's type and size.
+        let debug = std::env::var_os("DEMO_DEBUG").is_some();
+        eprintln!(
+            "[owner {}] inbound {:?} frame, sender {:?}, verified {}",
+            &room_did[..room_did.len().min(24)],
+            frame.message.protocol,
+            frame.message.sender,
+            frame.message.verified
+        );
+        if debug {
+            let ty = serde_json::from_slice::<serde_json::Value>(&frame.message.payload)
+                .ok()
+                .and_then(|v| v.get("type").and_then(|t| t.as_str().map(String::from)));
+            eprintln!(
+                "[owner debug] payload {} bytes, type {:?}",
+                frame.message.payload.len(),
+                ty
+            );
+        }
         let Some(sender) = frame.message.sender.clone() else {
+            eprintln!("[owner] dropped: no authenticated sender");
             continue;
         };
         if !frame.message.verified {
+            eprintln!("[owner] dropped: frame from {sender} is not verified");
+            continue;
+        }
+
+        // A TSP relationship request is not traffic. The transport has already recorded it,
+        // which is what admits the request that follows (§7.2.2); what is left is to answer,
+        // and an owner admits anyone to *ask* — whether they get in is the invitation's job.
+        if let InboundKind::RelationshipControl {
+            request,
+            thread_digest,
+            ..
+        } = &frame.kind
+        {
+            if matches!(request, RelationshipRequest::Invite) {
+                match atm
+                    .tsp()
+                    .accept_relationship(&profile, &sender, *thread_digest)
+                    .await
+                {
+                    Ok(state) => {
+                        eprintln!("[owner] accepted a TSP relationship from {sender} ({state:?})")
+                    }
+                    Err(e) => {
+                        eprintln!("[owner] could not accept a TSP relationship from {sender}: {e}")
+                    }
+                }
+            } else {
+                eprintln!("[owner] TSP relationship {request:?} from {sender}");
+            }
+            let _ = transport.ack(frame.ack.clone()).await;
             continue;
         }
 

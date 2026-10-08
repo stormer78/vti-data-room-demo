@@ -29,7 +29,7 @@
 //! Collapsing any two of them is how a room ends up with one bit of authorization.
 
 use chrono::{Duration, Utc};
-use dtg_credentials::DTGCredential;
+use dtg_credentials::{DTGCredential, IssuerScope};
 
 /// A room's signing identity.
 ///
@@ -167,7 +167,7 @@ impl RoomIdentity {
 
         // The `did:key` convention: the multibase tag IS the verification-method fragment,
         // which is what makes the key lexically recoverable from the identifier.
-        let secret = affinidi_secrets_resolver::secrets::Secret::from_str(
+        let secret = affinidi_secrets_resolver::secrets::Secret::from_jwk_value(
             &format!("{did}#{}", &did["did:key:".len()..]),
             &serde_json::json!({
                 "crv": "Ed25519",
@@ -216,6 +216,8 @@ impl RoomIdentity {
         let now = Utc::now();
         let mut vic = DTGCredential::new_vic(
             self.did.clone(),
+            // The room itself is the issuer, and it is a published identity (VTI convention).
+            IssuerScope::Public,
             subject.to_string(),
             now,
             Some(now + Duration::hours(1)),
@@ -260,6 +262,7 @@ impl RoomIdentity {
         let now = Utc::now();
         let mut vac = DTGCredential::new_vac(
             self.did.clone(),
+            IssuerScope::Public,
             subject.to_string(),
             // Scope is the room itself: this grant is about this room and no other.
             self.did.clone(),
@@ -320,10 +323,13 @@ impl RoomIdentity {
         let now = Utc::now();
         let mut leaf = root
             .attenuate(
+                // Issued to one counterparty, not published (VTI's room oracle does the same).
+                IssuerScope::Directed,
                 self.did.clone(),
                 vec![action.to_string()],
                 now,
                 now + Duration::hours(4),
+                None,
             )
             .map_err(|e| format!("narrow this authority to `{action}`: {e}"))?;
         self.sign(&mut leaf).await?;
@@ -454,18 +460,22 @@ mod tests {
         let now = Utc::now();
         let leaf = vac
             .attenuate(
+                IssuerScope::Directed,
                 member.to_string(),
                 vec!["read".into()],
                 now,
                 now + Duration::hours(4),
+                None,
             )
             .expect("a member may narrow what the room granted");
         assert!(
             vac.attenuate(
+                IssuerScope::Directed,
                 member.to_string(),
                 vec!["curate".into()],
                 now,
                 now + Duration::hours(4),
+                None,
             )
             .is_err(),
             "attenuation must refuse to widen: `curate` was never granted"

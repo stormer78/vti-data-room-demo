@@ -40,6 +40,7 @@ import {
   multibase,
   packAuthcryptJson,
   tspPack,
+  tspPackInvite,
   tspPackRouted,
   tspUnpack,
   wrapForward,
@@ -105,8 +106,29 @@ export async function advertised(did) {
 /// carries both on one socket, so a client that always spoke TSP would usually succeed — and
 /// would break, with nothing in the other party's document having changed, the first time it
 /// met one that served only DIDComm.
+///
+/// `?carrier=didcomm` (or `tsp`) on the page's URL overrides that, and is said out loud when the
+/// room does not advertise the one asked for. It exists for a mediator speaking a different TSP
+/// revision than this bundle: the request is rejected at the mediator and the room's owner never
+/// hears it, so the page waits for a reply that cannot come.
+/// `carrier=` from the query, or from a query inside the hash (`#/room/…?carrier=didcomm`),
+/// since a room link already carries one there and a second `?` is easy to put on either side.
+export function carrierOverride() {
+  const loc = globalThis.location;
+  if (!loc) return null;
+  const fromSearch = new URLSearchParams(loc.search).get("carrier");
+  const q = loc.hash.indexOf("?");
+  const fromHash = q >= 0 ? new URLSearchParams(loc.hash.slice(q + 1)).get("carrier") : null;
+  return fromSearch ?? fromHash;
+}
+
 export function preferredCarrier(a) {
   if (!a) return null;
+  const want = carrierOverride();
+  if (want === "didcomm" || want === "tsp") {
+    if (!a[want]) console.warn(`room does not advertise ${want} — asking over it anyway`);
+    return want;
+  }
   if (a.tsp) return "tsp";
   if (a.didcomm) return "didcomm";
   return null;
@@ -180,6 +202,9 @@ export class MediatorLink {
   #mediatorDid;
   #mediatorKeys;
   #peers = new Map();
+  /// Peers this link has invited to a TSP relationship (Rev 3 §7.2.2). Per link, because a
+  /// relationship belongs to a transport identity and each link has its own.
+  #related = new Set();
 
   constructor(connection, holder, mediatorDid) {
     this.#connection = connection;
@@ -324,15 +349,38 @@ export class MediatorLink {
     const keys = { senderSigningKey: edSecret, senderEncryptionKey };
     const peerKey = rawX25519(peer.keyAgreementPublicJwk);
 
+    const toMediator = {
+      ...keys,
+      receiverEncryptionKey: rawX25519(this.#mediatorKeys.keyAgreementPublicJwk),
+    };
+
+    // Rev 3 drops an application message from a VID it holds no relationship with, silently
+    // (§7.2.2) — which looks exactly like an owner that never answers. So the first message to
+    // a peer is preceded by an invite. Not awaited: any recorded state admits traffic both
+    // ways, and the mediator delivers the two in order, so the request can follow at once.
+    // The route is the reply path, so the accept comes back through our own mediator.
+    if (!this.#related.has(to)) {
+      const invite = await tspPackInvite(
+        this.transportDid,
+        to,
+        { ...keys, receiverEncryptionKey: peerKey },
+        { route: [this.#mediatorDid, this.transportDid] },
+      );
+      const routedInvite = await tspPackRouted(
+        invite.bytes, [to], this.transportDid, this.#mediatorDid, toMediator,
+      );
+      this.#connection.sendBinary(routedInvite.bytes);
+      this.#related.add(to);
+    }
+
     const bytes = new TextEncoder().encode(JSON.stringify(payload));
     const inner = await tspPack(bytes, this.transportDid, to, {
       ...keys,
       receiverEncryptionKey: peerKey,
     });
-    const routed = await tspPackRouted(inner.bytes, [to], this.transportDid, this.#mediatorDid, {
-      ...keys,
-      receiverEncryptionKey: rawX25519(this.#mediatorKeys.keyAgreementPublicJwk),
-    });
+    const routed = await tspPackRouted(
+      inner.bytes, [to], this.transportDid, this.#mediatorDid, toMediator,
+    );
 
     // The predicate decides which inbound frame *is* this reply. Without one the next frame
     // to arrive would be handed to this waiter, and a mediator sends frames of its own. Only
@@ -391,12 +439,20 @@ function checked(message) {
   return message;
 }
 
-/// One link per mediator, for the life of the page.
+/// One link per mediator **per transport identity**, for the life of the page.
 ///
 /// Keyed by mediator rather than by correspondent, because that is the actual constraint: a
-/// mediator allows this DID one socket, and a second would evict the first. Two parties on one
+/// mediator allows a DID one socket, and a second would evict the first. Two parties on one
 /// mediator therefore share a link; two mediators get one each.
-const links = new Map();
+///
+/// And per identity, because a page can hold more than one person at once — Alice and Bob side
+/// by side are two transport DIDs, each entitled to its own socket. Sharing one would make Bob
+/// speak as Alice's transport identity.
+const linksByHolder = new Map();
+const linksFor = (holder) => {
+  if (!linksByHolder.has(holder)) linksByHolder.set(holder, new Map());
+  return linksByHolder.get(holder);
+};
 
 /// The link to reach `peerDid` over, opening one if this page has none to its mediator.
 ///
@@ -405,6 +461,7 @@ const links = new Map();
 export async function linkTo(peerDid, holder) {
   const a = await advertised(peerDid);
   if (!a) return null;
+  const links = linksFor(holder);
 
   // A cached link is only worth reusing while its socket is up. A dropped one answers nothing
   // and cannot say so, so every request on it waits out its timeout — the page looks hung
@@ -432,9 +489,12 @@ export async function linkTo(peerDid, holder) {
 
 /// Drop every link. Called when the identity changes: a socket is authenticated as one
 /// transport DID, and a different member is a different party.
-export function closeLinks() {
-  for (const link of links.values()) link.close();
-  links.clear();
+export function closeLinks(holder) {
+  const holders = holder ? [holder] : [...linksByHolder.keys()];
+  for (const h of holders) {
+    for (const link of linksFor(h).values()) link.close();
+    linksByHolder.delete(h);
+  }
 }
 
 /// The Ed25519 key a room signs with, for the invitation gate in wasm.
