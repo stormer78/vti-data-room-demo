@@ -211,7 +211,8 @@ cargo run -- --hash-password          # type the password; prints its hash
 cargo run -- --access-hash <hash>     # or ACCESS_HASH=<hash>
 ```
 
-Everything this process serves sits behind it: the page, its modules and the room catalogue.
+Everything this process serves sits behind it, the page, its modules and the room catalogue,
+except `GET /health`, which a load balancer must reach without the password.
 A visitor gets a sign-in page and, after the right password, a cookie (HttpOnly,
 SameSite=Strict, 30 days). The cookie is derived from the hash, so restarting keeps people
 signed in and changing the password signs everybody out. This is a gate for a demo, not

@@ -19,6 +19,7 @@ use sha2::{Digest, Sha256};
 
 const COOKIE: &str = "dr_access";
 const LOGIN_PATH: &str = "/access";
+pub(crate) const HEALTH_PATH: &str = "/health";
 
 #[derive(Clone)]
 pub(crate) struct Gate {
@@ -75,7 +76,9 @@ struct Login {
 }
 
 pub(crate) async fn guard(State(gate): State<Gate>, req: Request, next: Next) -> Response {
-    if gate.has_cookie(req.headers()) {
+    // The health check is the one path a balancer must reach without the password. It says
+    // nothing a stranger could use: the process is up and its rooms are minted.
+    if gate.has_cookie(req.headers()) || req.uri().path() == HEALTH_PATH {
         return next.run(req).await;
     }
     if req.method() == Method::POST && req.uri().path() == LOGIN_PATH {
