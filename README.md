@@ -200,6 +200,24 @@ The owner reaches the host by URL while telling members its DID, and that is the
 than an inconsistency: the owner is a server and can open a URL, a browser frequently cannot,
 and one host serves both carriers at once with the client choosing.
 
+### Behind a password
+
+To put the site somewhere other people can reach, give it a shared password. The owner
+takes the password's SHA-256, never the password itself, so it stays out of the process list:
+
+```sh
+cd sample-room
+cargo run -- --hash-password          # type the password; prints its hash
+cargo run -- --access-hash <hash>     # or ACCESS_HASH=<hash>
+```
+
+Everything this process serves sits behind it: the page, its modules and the room catalogue.
+A visitor gets a sign-in page and, after the right password, a cookie (HttpOnly,
+SameSite=Strict, 30 days). The cookie is derived from the hash, so restarting keeps people
+signed in and changing the password signs everybody out. This is a gate for a demo, not
+access control: the mediator and `room-host` are not behind it, and the rooms' own
+credentials are what protect the data.
+
 ## What is real, and what is not
 
 **Real.** The `did:key` is minted in the tab by WebCrypto. The MLS group, record sealing

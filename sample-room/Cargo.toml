@@ -18,11 +18,11 @@ edition = "2024"
 # The same crate the browser runs, native. `mls` is the member/owner key layer;
 # the demo host keeps records in memory rather than through `vti-rooms::storage`,
 # which is honest for a demo and keeps the binary to one file.
-vti-rooms = { version = "0.1", features = ["mls"] }
+vti-rooms = { version = "0.11", features = ["mls"] }
 
 axum = "0.8"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "net"] }
-tower-http = { version = "0.6", features = ["fs", "cors"] }
+tower-http = { version = "0.6", features = ["fs", "cors", "set-header"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 base64 = "0.23"
@@ -31,7 +31,7 @@ base64 = "0.23"
 # 0.6, matching the VTI workspace the host is built from. 0.7 changed how an
 # authority chain links (parent id → parent digest), so a 0.7 issuer and a 0.6
 # verifier cannot interoperate.
-affinidi-tdk = "0.12"
+affinidi-tdk = "0.23"
 # Resolving a room's own `did:peer` to find the mediator it advertises. Pure computation —
 # a member finds where to ask to join without a network and without a registry, which is the
 # property that let a room be a `did:peer` at all.
@@ -48,20 +48,22 @@ affinidi-secrets-resolver = "0.5"
 # 0.13.0 went out before it merged. Checked rather than assumed from the version number —
 # dropping this line on the strength of "0.13 is newer than the fix" would silently stop
 # every TSP frame arriving. Remove it when a release actually carries the forwarding.
-affinidi-messaging-sdk = { version = "0.22", features = ["tsp"] }
+affinidi-messaging-sdk = { version = "0.33.2", features = ["tsp"] }
 # The transport-neutral shapes the delivery layer speaks: `Inbound`, `Protocol`,
 # `MessageTransport`. What lets one loop serve both carriers rather than two loops that
 # drift.
-affinidi-messaging-core = "0.1"
+affinidi-messaging-core = "0.1.11"
 futures-lite = "2"
-dtg-credentials = "0.9.1"
-affinidi-data-integrity = "0.7"
+dtg-credentials = "0.13"
+affinidi-data-integrity = "0.8"
 reqwest = { version = "0.13", features = ["json"] }
 uuid = { version = "1", features = ["v4"] }
 ed25519-dalek = "3"
 multibase = "0.9"
 getrandom = "0.4"
 chrono = "0.4"
+# The access password hash (`--access-hash`). Already in the tree through the TDK.
+sha2 = "0.10"
 
 [dev-dependencies]
 # The rooms-file tests write one and read it back, so they exercise the parse rather than a

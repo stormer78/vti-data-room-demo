@@ -9,7 +9,8 @@
   "dependencies": {
     "@noble/curves": "^2.0.1",
     "@openvtc/pnm-core": "^0.9.1",
-    "@openvtc/vti-didcomm-js": "^0.7.0"
+    "@openvtc/vti-didcomm-js": "^0.7.0",
+    "@openvtc/vti-tsp-js": "^0.3.0"
   },
   "devDependencies": {
     "esbuild": "^0.28.2"
