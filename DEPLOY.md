@@ -69,9 +69,13 @@ DEMO_WEB_DIR=/srv/web \
 
 Egress: outbound HTTPS and WSS to the mediator. Nothing else.
 
-**Health check** `GET /api/rooms`. It returns the catalogue as JSON once the rooms are minted
-and registered, which is the first moment the site is useful — so it fails while the owner is
-still starting rather than reporting ready too early.
+**Health check** `GET /health`, which answers `ok`. The process starts listening only after
+every room is minted, so the check fails while the owner is still starting rather than
+reporting ready too early. It is the one path outside the access password (see the README's
+*Behind a password*); `/api/rooms` is behind it once a password is set, and answers `401` to
+a balancer. Like the host's `/health`, it does not cover the mediator leg: an owner whose
+mediator connection failed still answers `ok`, and the startup log says
+`the owner is not listening on the mediator`.
 
 ### Serving the static files elsewhere
 

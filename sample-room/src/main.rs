@@ -488,6 +488,11 @@ async fn main() {
 
     let web = std::env::var("DEMO_WEB_DIR").unwrap_or_else(|_| "../web".to_string());
     let app = Router::new()
+        // `ok` once this is listening, which is only after every room is minted, so a
+        // balancer does not route to a site with nothing to offer yet. It does not mean the
+        // host or the mediator is reachable: both of those only warn at startup. Outside the
+        // password gate, unlike `/api/rooms`, which names the rooms' DIDs.
+        .route(access::HEALTH_PATH, get(|| async { "ok" }))
         .route("/api/rooms", get(catalogue))
         .layer(tower_http::cors::CorsLayer::permissive())
         .fallback_service(tower_http::services::ServeDir::new(&web))
